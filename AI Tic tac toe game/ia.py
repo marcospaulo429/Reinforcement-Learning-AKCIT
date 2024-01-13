@@ -261,3 +261,22 @@ def acao_ia(estado_ingame):
             else: 
                 continue
 
+estado_ingame = [0,0,0,0,0,0,0,0,0]
+
+def mostrar_estado(estado):
+    print(estado[0],estado[1],estado[2])
+    print(estado[3],estado[4],estado[5])
+    print(estado[6],estado[7],estado[8],"\n")
+
+for i in range(0,9):
+    ia_play = acao_ia(estado_ingame)
+    estado_ingame = novo_estado(estado_ingame,ia_play)
+    mostrar_estado(estado_ingame)
+    if done(estado_ingame) is False:
+        p1 = int(input("Faça sua jogada: "))
+        estado_ingame[(p1-1)] = 2
+        mostrar_estado(estado_ingame)
+        if done(estado_ingame) is False:
+            continue
+    else:
+        break
