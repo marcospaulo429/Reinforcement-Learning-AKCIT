@@ -1,4 +1,4 @@
-# Reinfocement Learning in AKCIT-UFG
+# Reinforcement Learning in AKCIT-UFG
 
 ## About the project
 The goal of this project is to develop scientific work for advancement, publication of articles and development of techniques in the area of ​​reinforcement learning.
