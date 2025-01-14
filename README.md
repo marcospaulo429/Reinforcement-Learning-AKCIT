@@ -1,12 +1,10 @@
-# Reinfocement Learning
+# Reinfocement Learning in AKCIT-UFG
 
-## Reinforcement Learning in Tic-Tac-Toe
-### Description
-This repository presents the implementation of a Reinforcement Learning agent to play Tic-Tac-Toe game against a human player. The project was developed based on Stanford classes available on YouTube, with the goal of applying theoretical concepts of reinforcement learning in a practical and interactive scenario.
+## About the project
+The goal of this project is to develop scientific work for advancement, publication of articles and development of techniques in the area of ​​reinforcement learning.
 
-### Main Techniques Implemented
-SARSA (State-Action-Reward-State-Action): An on-policy learning algorithm that updates Q values ​​based on the actions actually taken by the agent.
-Epsilon-Greedy Policy: Used to balance the exploration of new actions and the exploration of actions known to be the best.
-Q-Table: Data structure to store the Q values ​​of state-action pairs, allowing the agent to learn the best game policy.
-Discount Factor and Learning Rate: Configurable to control the importance of future rewards and the agent's learning speed.
-End State and Draw Management: Functions to determine when the game ends, either by win or draw, adjusting rewards accordingly.
+In addition, since I joined as a junior developer, the project seeks to train people to work in the area of ​​reinforcement learning, combining the gain of theoretical knowledge with practical application.
+
+## About AKCIT-UFG
+
+AKCIT (Advanced Knowledge Center for Immersive Technologies) is Embrapii's Competence Center for Immersive Technologies Applied to Virtual Worlds, linked to the Federal University of Goiás (UFG). Located in Goiânia, Brazil, AKCIT leads research, development and innovation in areas such as Virtual Reality, Augmented Reality, Digital Twins, Internet of Things and Edge Computing. With a cutting-edge laboratory and significant investments, the center promotes the training of human resources and the acceleration of startups, boosting the innovation ecosystem in Brazil.
