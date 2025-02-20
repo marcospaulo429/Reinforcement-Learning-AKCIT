@@ -10,6 +10,16 @@ from dm_control import suite
 from dm_control.suite.wrappers import pixels
 from torch.utils.data import TensorDataset, DataLoader
 
+def training_device():
+    if torch.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    else :
+        device = torch.device("cpu")
+        
+    return device
+
 def denormalize(img):
     return ((img + 1) * 127.5).clip(0, 255).astype(np.uint8)
 
@@ -99,7 +109,18 @@ def ver_reconstrucoes(world_model, test_loader, device, input_size, num_samples=
     next_obs = next_obs.to(device)
     batch_size = obs.size(0)
     
-    # Inicializa o estado oculto com zeros inicialmente
+    # Verifica e ajusta as dimensões de obs e next_obs
+    if obs.dim() == 2:  # Formato: (B, HEIGHT*WIDTH)
+        obs = obs.view(-1, 1, HEIGHT, WIDTH)
+    elif obs.dim() == 3:  # Formato: (B, HEIGHT, WIDTH)
+        obs = obs.unsqueeze(1)
+        
+    if next_obs.dim() == 2:
+        next_obs = next_obs.view(-1, 1, HEIGHT, WIDTH)
+    elif next_obs.dim() == 3:
+        next_obs = next_obs.unsqueeze(1)
+    
+    # Inicializa o estado oculto com zeros
     prev_hidden = torch.zeros(batch_size, hidden_dim, device=device)
     
     with torch.no_grad():
@@ -108,19 +129,19 @@ def ver_reconstrucoes(world_model, test_loader, device, input_size, num_samples=
     original = next_obs.cpu().numpy()    
     reconstructed = recon_next.cpu().numpy()
     
-    
     num_samples = min(num_samples, batch_size)
     plt.figure(figsize=(2 * num_samples, 4))
     
     for i in range(num_samples):
         plt.subplot(2, num_samples, i + 1)
-        orig_img = original[i].reshape(HEIGHT, WIDTH)
+        # Remover dimensões extras (ex.: canal) para visualização
+        orig_img = original[i].squeeze()
         orig_img = denormalize(orig_img)
         plt.imshow(orig_img, cmap='gray')
         plt.axis('off')
         
         plt.subplot(2, num_samples, i + 1 + num_samples)
-        recon_img = reconstructed[i].reshape(HEIGHT, WIDTH)
+        recon_img = reconstructed[i].squeeze()
         recon_img = denormalize(recon_img)
         plt.imshow(recon_img, cmap='gray')
         plt.axis('off')
