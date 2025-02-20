@@ -6,25 +6,43 @@ from torch.utils.data import TensorDataset, DataLoader
 from PIL import Image
 import matplotlib.pyplot as plt
 
+# --- Autoencoder baseado em CNN ---
 class Autoencoder(nn.Module):
-    def __init__(self, input_size,latent_dim):
+    def __init__(self, latent_dim):
+        """
+        Constrói um autoencoder com arquitetura CNN.
+        Entrada: imagem em escala de cinza com shape (B, 1, 84, 84)
+        Saída: imagem reconstruída com shape (B, 1, 84, 84)
+        """
         super(Autoencoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_size, latent_dim*2),
+        # Encoder: convoluções para extrair features
+        self.encoder_conv = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=4, stride=2, padding=1),  # (B, 32, 42, 42)
             nn.ReLU(True),
-            nn.Linear(latent_dim*2, latent_dim),  # vetor latente de dimensão 64
-            nn.ReLU(True),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1), # (B, 64, 21, 21)
+            nn.ReLU(True)
         )
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, latent_dim*2),
+        # Camada fully-connected para gerar o vetor latente
+        self.encoder_fc = nn.Linear(64 * 21 * 21, latent_dim)
+        
+        # Decoder: transforma o vetor latente de volta em feature maps
+        self.decoder_fc = nn.Linear(latent_dim, 64 * 21 * 21)
+        self.decoder_deconv = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # (B, 32, 42, 42)
             nn.ReLU(True),
-            nn.Linear(latent_dim*2, input_size),
-            nn.Tanh(),  # saída em [-1, 1]
+            nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1),   # (B, 1, 84, 84)
+            nn.Tanh()  # saída em [-1,1]
         )
+        
     def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
+        # x deve ter shape (B, 1, 84, 84)
+        conv_out = self.encoder_conv(x)              # (B, 64, 21, 21)
+        conv_out = conv_out.view(conv_out.size(0), -1) # (B, 64*21*21)
+        latent = self.encoder_fc(conv_out)             # (B, latent_dim)
+        fc_out = self.decoder_fc(latent)               # (B, 64*21*21)
+        fc_out = fc_out.view(-1, 64, 21, 21)            # (B, 64, 21, 21)
+        reconstructed = self.decoder_deconv(fc_out)    # (B, 1, 84, 84)
+        return reconstructed
 
 class TransitionModel(nn.Module):
     def __init__(self, latent_dim, action_dim, hidden_dim):
