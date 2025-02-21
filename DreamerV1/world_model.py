@@ -248,7 +248,7 @@ def main():
     torch.save(world_model.state_dict(), f"{repositorio}/world_model_weights.pth")
     print("Model weights saved to 'world_model_weights.pth'")
     
-    with open(f"world_model/{versao_modelo}/training_details.txt", "a") as log_file:  
+    with open(f"{repositorio}/training_details.txt", "a") as log_file:  
         log_file.write(f"Epochs: {num_epochs}, Batch: {batch_size}, Latent Dimension: {latent_dim}, Hidden Dimension: {hidden_dim}, Size Buffer: {S}\n")
 
     

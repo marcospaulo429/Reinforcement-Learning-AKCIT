@@ -42,21 +42,27 @@ def imagine_rollout(world_model, actor, initial_latent, initial_hidden, horizon=
     returns = torch.stack(returns, dim=0)
     return latents, rewards, returns
 
-def behavior_learning(world_model, actor, value_net, epochs_behavior, train_loader,
+def behavior_learning(world_model, actor, value_net, epochs_behavior, train_loader, device,
                       horizon=5, gamma=0.99,
                       value_optimizer=None, actor_optimizer=None,
                       mse_loss=None, repositorio=None):
     writer = SummaryWriter(f"{repositorio}")
 
     obs, _, _, _ = next(iter(train_loader))
-    obs = obs.to('cpu')  
+
+    if obs.dim() == 2 and obs.size(1) == 84 * 84:
+        obs = obs.view(obs.size(0), 1, 84, 84)
+    obs = obs.to(device)
     batch_obs = obs  
     batch_size = batch_obs.size(0)
     device = batch_obs.device
 
     hidden_dim = world_model.transition_model.gru.hidden_size
 
-    latent_init = world_model.autoencoder.encoder(batch_obs)
+    conv_out = world_model.autoencoder.encoder_conv(obs)  # (B, 64, 21, 21)
+    conv_out = conv_out.view(conv_out.size(0), -1)           # (B, 28224)
+    latent = world_model.autoencoder.encoder_fc(conv_out)    # (B, latent_dim)
+
     prev_hidden = torch.zeros(batch_size, hidden_dim, device=device)
 
     for b_ep in range(epochs_behavior):
@@ -67,13 +73,19 @@ def behavior_learning(world_model, actor, value_net, epochs_behavior, train_load
         for batch in train_loader:
             obs, _, _, _ = batch
             obs = obs.to(device)
+            if obs.dim() == 2 and obs.size(1) == 84 * 84:
+                obs = obs.view(obs.size(0), 1, 84, 84)
             
             batch_size = obs.size(0)
-            latent_init = world_model.autoencoder.encoder(obs)
+            conv_out = world_model.autoencoder.encoder_conv(obs)  # (B, 64, 21, 21)
+            conv_out = conv_out.view(conv_out.size(0), -1)           # (B, 28224)
+            latent_init = world_model.autoencoder.encoder_fc(conv_out)   # (B, latent_dim)
+            
             prev_hidden = torch.zeros(batch_size, hidden_dim, device=device)
             
             latents, rewards, returns = imagine_rollout(world_model, actor, latent_init, prev_hidden, horizon, gamma)
             
+            # Calcula a perda do value_net ao longo do horizonte
             value_loss = 0.0
             for t in range(horizon):
                 v_pred = value_net(latents[t])
@@ -104,6 +116,7 @@ def behavior_learning(world_model, actor, value_net, epochs_behavior, train_load
     return actor, value_net
 
 
+
 def environment_interaction(env, actor, world_model, replay_buffer, device, 
                             hidden_dim, steps=500, exploration_noise=0.1):
     time_step = env.reset()
@@ -115,12 +128,16 @@ def environment_interaction(env, actor, world_model, replay_buffer, device,
     steps_done = 0
 
     while steps_done < steps:
-        obs_tensor = torch.tensor(obs_atual).view(1, -1).to(device)
-        latent = world_model.autoencoder.encoder(obs_tensor)
+        # Converte a observação para tensor com shape (1, 1, 84, 84)
+        obs_tensor = torch.tensor(obs_atual).view(1, 1, 84, 84).to(device)
+        conv_out = world_model.autoencoder.encoder_conv(obs_tensor)  # (1, 64, 21, 21)
+        conv_out = conv_out.view(conv_out.size(0), -1)               # (1, 28224)
+        latent = world_model.autoencoder.encoder_fc(conv_out)        # (1, latent_dim)
+        
         action_tensor = actor(latent)
         action_np = action_tensor.detach().cpu().numpy()[0]
         
-        #TODO: fazer estrategia de exploracao
+        # TODO Estratégia de exploração
 
         time_step = env.step(action_np)
         done = time_step.last()
@@ -159,8 +176,11 @@ def evaluate_policy(env, actor, world_model, device, num_episodes=5):
         obs_atual = obs_atual.astype(np.float32) / 127.5 - 1.0
 
         while not done:
-            obs_tensor = torch.tensor(obs_atual).view(1, -1).to(device)
-            latent = world_model.autoencoder.encoder(obs_tensor)
+            obs_tensor = torch.tensor(obs_atual).view(1, 1, 84, 84).to(device)
+            conv_out = world_model.autoencoder.encoder_conv(obs_tensor)  # (1, 64, 21, 21)
+            conv_out = conv_out.view(conv_out.size(0), -1)               # (1, 28224)
+            latent = world_model.autoencoder.encoder_fc(conv_out)        # (1, latent_dim)
+            
             action_tensor = actor(latent)
             action_np = action_tensor.detach().cpu().numpy()[0]
             
@@ -178,9 +198,9 @@ def evaluate_policy(env, actor, world_model, device, num_episodes=5):
 def main():
     HEIGHT = 84
     WIDTH = 84
-    hidden_dim = 128
+    hidden_dim = 256
     input_size = HEIGHT * WIDTH
-    latent_dim = 128
+    latent_dim = 256
     batch_size = 32
     S = 5
     repositorio = "dreamer/model_1"
@@ -191,7 +211,7 @@ def main():
     env = pixels.Wrapper(env, pixels_only=True,
                          render_kwargs={'height': HEIGHT, 'width': WIDTH, 'camera_id': 0})
     
-    replay_buffer = ReplayBuffer(max_size=10000, sequence_length=1)
+    replay_buffer = ReplayBuffer()
     replay_buffer = collect_replay_buffer(env, S, replay_buffer)
     
     action_dim = env.action_spec().shape[0]
@@ -211,19 +231,20 @@ def main():
     writer = SummaryWriter(f"{repositorio}")
     
     rewards_history = []
-    num_iterations = int(input("Coloque o número de interações: "))
+    #num_iterations = int(input("Coloque o número de interações: "))
+    num_iterations = 10
     iteration = 0
     
     while num_iterations > 0:
         for it in range(num_iterations):
             iteration += 1
-            print(f"\n=== Iteração {it+1}/{num_iterations} (Total Iterações: {iteration}) ===")
+            print(f"\n Iteração {it+1}/{num_iterations} (Total Iterações: {iteration})")
             
             epochs_wm = 5
             train_world_model(epochs_wm, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer, repositorio)
             
             epochs_behavior = 5
-            actor, value_net = behavior_learning(world_model, actor, value_net, epochs_behavior, train_loader,
+            actor, value_net = behavior_learning(world_model, actor, value_net, epochs_behavior, train_loader, device,
                                                   horizon=5, gamma=0.99,
                                                   value_optimizer=value_optimizer, actor_optimizer=actor_optimizer,
                                                   mse_loss=mse_loss, repositorio=repositorio)
@@ -238,11 +259,17 @@ def main():
             print(f"  Recompensa média (avaliação) = {avg_rew:.2f}")
             writer.add_scalar("Reward/Average", avg_rew, iteration)
             
-            # histogramas do estado latente para visualizar sua evolução
             for batch in test_loader:
-                obs, _, _, _ = batch
+                obs, _, _, _ = next(iter(train_loader))
+
+                if obs.dim() == 2 and obs.size(1) == 84*84:
+                    obs = obs.view(obs.size(0), 1, 84, 84)
+
                 obs = obs.to(device)
-                latent = world_model.autoencoder.encoder(obs)
+                conv_out = world_model.autoencoder.encoder_conv(obs)  # Saída: (B, 64, 21, 21)
+                conv_out = conv_out.view(conv_out.size(0), -1)           # (B, 28224)
+                latent = world_model.autoencoder.encoder_fc(conv_out)    # (B, latent_dim)
+
                 writer.add_histogram("Latent/Distribution", latent, iteration)
                 break  
         
