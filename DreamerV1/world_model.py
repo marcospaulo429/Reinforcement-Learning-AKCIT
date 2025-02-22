@@ -125,8 +125,7 @@ def visualize_autoencoder(autoencoder, test_loader, device, HEIGHT, WIDTH, num_s
     plt.show()
 
 
-def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer,repositorio): 
-    writer = SummaryWriter(f"{repositorio}")
+def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer,writer): 
     for epoch in range(num_epochs):
         world_model.train()
         reward_loss_epoch = 0
