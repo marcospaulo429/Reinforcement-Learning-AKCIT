@@ -125,8 +125,7 @@ def visualize_autoencoder(autoencoder, test_loader, device, HEIGHT, WIDTH, num_s
     plt.show()
 
 
-def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer,repositorio): 
-    writer = SummaryWriter(f"{repositorio}")
+def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer,writer): 
     for epoch in range(num_epochs):
         world_model.train()
         reward_loss_epoch = 0
@@ -248,7 +247,7 @@ def main():
     torch.save(world_model.state_dict(), f"{repositorio}/world_model_weights.pth")
     print("Model weights saved to 'world_model_weights.pth'")
     
-    with open(f"world_model/{versao_modelo}/training_details.txt", "a") as log_file:  
+    with open(f"{repositorio}/training_details.txt", "a") as log_file:  
         log_file.write(f"Epochs: {num_epochs}, Batch: {batch_size}, Latent Dimension: {latent_dim}, Hidden Dimension: {hidden_dim}, Size Buffer: {S}\n")
 
     
