@@ -1,5 +1,4 @@
-import csv
-import json
+import random
 import numpy as np
 from auxiliares import converter_cinza
 
@@ -45,3 +44,27 @@ def collect_replay_buffer(env,S,replay_buffer):
         replay_buffer.add_episode(episode_data)
     print(f"Collected {S} episodes.") 
     return replay_buffer
+
+def sample_data_sequences(replay_buffer, num_sequences, sequence_length):
+    """
+    Seleciona num_sequences (X) sequências, cada uma com sequence_length (Y) passos, 
+    a partir dos episódios presentes em replay_buffer.
+    
+    Retorna um novo ReplayBuffer contendo essas sequências como episódios.
+    """
+    new_buffer = ReplayBuffer()
+    
+    # Filtra apenas episódios com comprimento suficiente
+    valid_episodes = [ep for ep in replay_buffer.buffer if len(ep) >= sequence_length]
+    if len(valid_episodes) == 0:
+        raise ValueError("Nenhum episódio possui comprimento >= sequence_length")
+    
+    for _ in range(num_sequences):
+        # Escolhe aleatoriamente um episódio entre os válidos
+        episode = random.choice(valid_episodes)
+        # Escolhe um índice de início aleatório para extrair uma sequência de tamanho sequence_length
+        start_idx = random.randint(0, len(episode) - sequence_length)
+        sub_episode = episode[start_idx : start_idx + sequence_length]
+        new_buffer.add_episode(sub_episode)
+        
+    return new_buffer

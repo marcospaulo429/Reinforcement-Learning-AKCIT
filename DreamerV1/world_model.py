@@ -3,15 +3,11 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
-from torch.utils.data import TensorDataset, DataLoader
-from PIL import Image
-import matplotlib.pyplot as plt
 from replay_buffer import ReplayBuffer, collect_replay_buffer
 from wm_models import Autoencoder, TransitionModel, RewardModel
 from dm_control import suite
 from dm_control.suite.wrappers import pixels
-from auxiliares import converter_cinza, get_data_loaders_from_replay_buffer, ver_reconstrucoes, denormalize, training_device
+from auxiliares import  get_data_loaders_from_replay_buffer, denormalize, training_device
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
@@ -127,6 +123,7 @@ def visualize_autoencoder(autoencoder, test_loader, device, HEIGHT, WIDTH, num_s
     plt.show()
 
 def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer, writer): 
+
     reward_train_history = []
     reward_test_history = []
     loss_train_history = []
@@ -212,10 +209,11 @@ def train_world_model(num_epochs, world_model, train_loader, test_loader, device
     
     return loss_train_history, loss_test_history, reward_train_history, reward_test_history
 
+
 def main():
     HEIGHT = 84
     WIDTH = 84
-    repositorio = "world_model/model_6"
+    repositorio = "world_model/model_7"
     input_size = HEIGHT * WIDTH 
     latent_dim = 256
     action_dim = 1
@@ -223,7 +221,7 @@ def main():
     num_epochs = 10
     batch_size = 32
     device = training_device()
-    S = 5
+    S = 8
     print("Using device:", device)
     
     writer = SummaryWriter(log_dir=repositorio)
