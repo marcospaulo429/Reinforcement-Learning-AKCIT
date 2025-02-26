@@ -2,12 +2,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+import random
 from torch.utils.data import TensorDataset, DataLoader
 from PIL import Image
 import matplotlib.pyplot as plt
-from wm_models import Autoencoder, TransitionModel, RewardModel
-from dm_control import suite
-from dm_control.suite.wrappers import pixels
 from torch.utils.data import TensorDataset, DataLoader
 
 def training_device():
@@ -18,7 +16,9 @@ def training_device():
     else :
         device = torch.device("cpu")
         
+    print(device)
     return device
+
 
 def denormalize(img):
     return ((img + 1) * 127.5).clip(0, 255).astype(np.uint8)
