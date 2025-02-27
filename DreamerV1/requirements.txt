@@ -1,0 +1,8 @@
+torch
+numpy
+os
+dm_control
+wandb
+gymnasium
+torchvision
+matplotlib

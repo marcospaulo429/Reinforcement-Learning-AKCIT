@@ -6,7 +6,7 @@ import gymnasium as gym
 from replay_buffer import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import TensorDataset
-from models_dreamer import ActionModel, ValueNet
+from actor_critic import ActionModel, ValueNet
 from auxiliares import training_device
 
 
