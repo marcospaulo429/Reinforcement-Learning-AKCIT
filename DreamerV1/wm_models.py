@@ -1,10 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-from torch.utils.data import TensorDataset, DataLoader
-from PIL import Image
-import matplotlib.pyplot as plt
 
 # --- Autoencoder baseado em CNN ---
 class Autoencoder(nn.Module):
@@ -71,3 +66,32 @@ class RewardModel(nn.Module):
         )
     def forward(self, latent):
         return self.fc(latent)
+    
+    
+class DreamerWorldModel(nn.Module):
+    def __init__(self, input_size, latent_dim, action_dim, hidden_dim):
+        """
+        input_size: não é mais utilizado pelo autoencoder CNN, mas pode ser útil para compatibilidade.
+        latent_dim: dimensão do vetor latente (por exemplo, 256)
+        action_dim: dimensão da ação (por exemplo, 1)
+        hidden_dim: dimensão do estado oculto da GRU (por exemplo, 256)
+        """
+        super(DreamerWorldModel, self).__init__()
+        self.autoencoder = Autoencoder(latent_dim)
+        self.transition_model = TransitionModel(latent_dim, action_dim, hidden_dim)
+        self.reward_model = RewardModel(latent_dim)
+        
+    def forward(self, observation, action, prev_hidden):
+        # observation deve ter shape (B, 1, 84, 84)
+        # Usa o autoencoder CNN para obter o vetor latente a partir do encoder
+        conv_out = self.autoencoder.encoder_conv(observation)  # (B, 64, 21, 21)
+        conv_out = conv_out.view(conv_out.size(0), -1)           # (B, 64*21*21)
+        latent = self.autoencoder.encoder_fc(conv_out)           # (B, latent_dim)
+        
+        latent_next, hidden, mean, std = self.transition_model(prev_hidden, latent, action)
+        reward_pred = self.reward_model(latent_next)
+        # Reconstrução usando o decoder do autoencoder:
+        fc_out = self.autoencoder.decoder_fc(latent_next)        # (B, 64*21*21)
+        fc_out = fc_out.view(-1, 64, 21, 21)                      # (B, 64, 21, 21)
+        recon_obs = self.autoencoder.decoder_deconv(fc_out)       # (B, 1, 84, 84)
+        return latent_next, hidden, mean, std, reward_pred, recon_obs

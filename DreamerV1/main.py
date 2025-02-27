@@ -1,5 +1,4 @@
 import os
-import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -14,8 +13,8 @@ from replay_buffer import ReplayBuffer, sample_data_sequences, converter_cinza
 from world_model import (DreamerWorldModel, 
                          get_data_loaders_from_replay_buffer, 
                          collect_replay_buffer, train_world_model)
-from behavior_learning import behavior_learning, extract_latent_sequences, create_latent_dataset, select_action
-from models_dreamer import ActionModel, ValueNet
+from behavior_learning import behavior_learning, extract_latent_sequences, create_latent_dataset
+from actor_critic import ActionModel, ValueNet
 
 import wandb
 
@@ -68,6 +67,31 @@ def main():
     device = training_device()
     print("Usando device:", device)
     
+    env = suite.load(domain_name="cartpole", task_name="swingup")
+    env = pixels.Wrapper(env, pixels_only=True,
+                         render_kwargs={'height': HEIGHT, 'width': WIDTH, 'camera_id': 0})
+    
+    replay_buffer = ReplayBuffer()
+    
+    action_dim = env.action_spec().shape[0]
+    
+    # Carrega o World Model treinado
+    world_model = DreamerWorldModel(input_size, latent_dim, action_dim, hidden_dim).to(device)
+    world_model.load_state_dict(torch.load("dreamer/model_15/world_model_weights.pth"))
+    wm_optimizer = optim.Adam(world_model.parameters(), lr=6e-4)
+    mse_loss = nn.MSELoss()
+    
+    actor = ActionModel(latent_dim, action_dim).to(device)
+    value_net = ValueNet(latent_dim).to(device)
+    actor_optimizer = optim.Adam(actor.parameters(), lr=8e-5)
+    value_optimizer = optim.Adam(value_net.parameters(), lr=8e-5)
+    
+    start_iteration = 0  # Inicia do zero, se não usar checkpoint
+
+    checkpoint_path = os.path.join(repositorio, "checkpoint.pth")
+    start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
+                                      wm_optimizer, actor_optimizer, value_optimizer)
+    
     # Inicializa o wandb e configura os hiperparâmetros
     wandb.init(project="dreamer_14", config={
         "HEIGHT": HEIGHT,
@@ -80,36 +104,10 @@ def main():
         "update_step": update_step
     })
     
-    # (Opcional) Definição de métrica customizada – se necessário
     wandb.define_metric("Reward/Episode", step_metric="global_step", summary="max")
     
-    env = suite.load(domain_name="cartpole", task_name="swingup")
-    env = pixels.Wrapper(env, pixels_only=True,
-                         render_kwargs={'height': HEIGHT, 'width': WIDTH, 'camera_id': 0})
-    
-    replay_buffer = ReplayBuffer()
     replay_buffer = collect_replay_buffer(env, 5, replay_buffer)
     
-    action_dim = env.action_spec().shape[0]
-    
-    # Carrega o World Model treinado
-    world_model = DreamerWorldModel(input_size, latent_dim, action_dim, hidden_dim).to(device)
-    world_model.load_state_dict(torch.load("world_model/model_6/world_model_weights.pth"))
-    wm_optimizer = optim.Adam(world_model.parameters(), lr=6e-4)
-    mse_loss = nn.MSELoss()
-    
-    # Inicializa os modelos de comportamento (novos)
-    actor = ActionModel(latent_dim, action_dim).to(device)
-    value_net = ValueNet(latent_dim).to(device)
-    actor_optimizer = optim.Adam(actor.parameters(), lr=8e-5)
-    value_optimizer = optim.Adam(value_net.parameters(), lr=8e-5)
-    
-    # (Opcional) Tenta carregar um checkpoint
-    start_iteration = 0  # Inicia do zero, se não usar checkpoint
-
-    checkpoint_path = os.path.join(repositorio, "dreamer/model_11")
-    start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
-                                      wm_optimizer, actor_optimizer, value_optimizer)
     
     rewards_history = []
     
@@ -122,18 +120,20 @@ def main():
         for it in range(update_step):
             print(f"\nUpdate Step {it+1}/{update_step} da iteração {iteration+1}/{num_iterations}")
             
-            # Treinamento do World Model
-            loss_train_history, loss_test_history, reward_train_history, reward_test_history = train_world_model(
-                epochs_wm_behavior, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer)
             
-            # Registra as métricas do world model no wandb
-            for epoch in range(epochs_wm_behavior):
-                log_wandb({
-                    "WorldModel/TrainLoss": loss_train_history[epoch],
-                    "WorldModel/TestLoss": loss_test_history[epoch],
-                    "WorldModel/RewardTrainLoss": reward_train_history[epoch],
-                    "WorldModel/RewardTestLoss": reward_test_history[epoch]
-                })
+            if iteration % 15 == 0:
+                # Treinamento do World Model
+                loss_train_history, loss_test_history, reward_train_history, reward_test_history = train_world_model(
+                    15, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer)
+                
+                # Registra as métricas do world model no wandb
+                for epoch in range(epochs_wm_behavior):
+                    log_wandb({
+                        "WorldModel/TrainLoss": loss_train_history[epoch],
+                        "WorldModel/TestLoss": loss_test_history[epoch],
+                        "WorldModel/RewardTrainLoss": reward_train_history[epoch],
+                        "WorldModel/RewardTestLoss": reward_test_history[epoch]
+                    })
             
             # Treinamento do comportamento (Actor e ValueNet)
             epochs_behavior = epochs_wm_behavior
