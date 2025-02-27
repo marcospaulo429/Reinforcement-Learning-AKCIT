@@ -1,39 +1,89 @@
+import os
 import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from dm_control import suite
 from dm_control.suite.wrappers import pixels
 
 from auxiliares import training_device
-from replay_buffer import ReplayBuffer , sample_data_sequences, converter_cinza
+from replay_buffer import ReplayBuffer, sample_data_sequences, converter_cinza
 from world_model import (DreamerWorldModel, 
-                get_data_loaders_from_replay_buffer, 
-                        collect_replay_buffer, train_world_model)
-from behavior_learning import Actor, ValueNet, behavior_learning, extract_latent_sequences, create_latent_dataset
-from torch.utils.tensorboard import SummaryWriter #tensorboard --logdir=dreamer/model_5
+                         get_data_loaders_from_replay_buffer, 
+                         collect_replay_buffer, train_world_model)
+from behavior_learning import behavior_learning, extract_latent_sequences, create_latent_dataset, select_action
+from models_dreamer import ActionModel, ValueNet
 
+import wandb
+
+# Variável global para o contador de steps
+global_step = 0
+
+def log_wandb(metrics):
+    """Loga métricas no wandb usando o contador global e o incrementa."""
+    global global_step
+    wandb.log(metrics, step=global_step)
+    global_step += 1
+
+# --- Função de checkpoint ---
+def load_checkpoint(checkpoint_path, world_model, actor, value_net,
+                    wm_optimizer, actor_optimizer, value_optimizer):
+    """
+    Carrega os pesos e estados dos otimizadores a partir do checkpoint salvo.
+    
+    Retorna:
+        iteration (int): A iteração a partir da qual continuar o treinamento.
+    """
+    if os.path.exists(checkpoint_path):
+        print(f"Carregando checkpoint de {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path)
+        world_model.load_state_dict(checkpoint["world_model_state"])
+        actor.load_state_dict(checkpoint["actor_state"])
+        value_net.load_state_dict(checkpoint["value_net_state"])
+        wm_optimizer.load_state_dict(checkpoint["optimizer_world_model"])
+        actor_optimizer.load_state_dict(checkpoint["optimizer_actor"])
+        value_optimizer.load_state_dict(checkpoint["optimizer_value_net"])
+        iteration = checkpoint.get("iteration", 0)
+        print(f"Checkpoint carregado. Retomando a partir da iteração {iteration}")
+        return iteration
+    else:
+        print("Nenhum checkpoint encontrado. Iniciando treinamento do zero.")
+        return 0
+
+# --- Função main ---
 def main():
     HEIGHT = 84
     WIDTH = 84
     hidden_dim = 256
     input_size = HEIGHT * WIDTH
     latent_dim = 256
-    batch_size = 512
+    batch_size = 1250
     epochs_wm_behavior = 5
-    num_iterations = 100
+    num_iterations = 1000
     update_step = 1
-    repositorio = "dreamer/model_10"
+    repositorio = "dreamer/model_15"
     device = training_device()
     print("Usando device:", device)
     
-    writer = SummaryWriter(log_dir=repositorio)
+    # Inicializa o wandb e configura os hiperparâmetros
+    wandb.init(project="dreamer_14", config={
+        "HEIGHT": HEIGHT,
+        "WIDTH": WIDTH,
+        "hidden_dim": hidden_dim,
+        "latent_dim": latent_dim,
+        "batch_size": batch_size,
+        "epochs_wm_behavior": epochs_wm_behavior,
+        "num_iterations": num_iterations,
+        "update_step": update_step
+    })
     
-    env = suite.load(domain_name="cartpole", task_name="balance")
+    # (Opcional) Definição de métrica customizada – se necessário
+    wandb.define_metric("Reward/Episode", step_metric="global_step", summary="max")
+    
+    env = suite.load(domain_name="cartpole", task_name="swingup")
     env = pixels.Wrapper(env, pixels_only=True,
                          render_kwargs={'height': HEIGHT, 'width': WIDTH, 'camera_id': 0})
     
@@ -48,18 +98,24 @@ def main():
     wm_optimizer = optim.Adam(world_model.parameters(), lr=6e-4)
     mse_loss = nn.MSELoss()
     
-    # Inicializa os modelos de comportamento
-    actor = Actor(latent_dim, action_dim).to(device)
+    # Inicializa os modelos de comportamento (novos)
+    actor = ActionModel(latent_dim, action_dim).to(device)
     value_net = ValueNet(latent_dim).to(device)
     actor_optimizer = optim.Adam(actor.parameters(), lr=8e-5)
     value_optimizer = optim.Adam(value_net.parameters(), lr=8e-5)
     
+    # (Opcional) Tenta carregar um checkpoint
+    start_iteration = 0  # Inicia do zero, se não usar checkpoint
+
+    checkpoint_path = os.path.join(repositorio, "dreamer/model_11")
+    start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
+                                      wm_optimizer, actor_optimizer, value_optimizer)
+    
     rewards_history = []
     
-    for iteration in range(num_iterations):
-        # Draw B data sequences from replay buffer
-        data_sequence = sample_data_sequences(replay_buffer, num_sequences= 50, sequence_length=50)
-        
+    for iteration in range(start_iteration, num_iterations):
+        # Coleta sequências de dados do replay buffer
+        data_sequence = sample_data_sequences(replay_buffer, num_sequences=50, sequence_length=50)
         train_loader, test_loader = get_data_loaders_from_replay_buffer(
             data_sequence, batch_size=batch_size, HEIGHT=HEIGHT, WIDTH=WIDTH)
         
@@ -68,15 +124,16 @@ def main():
             
             # Treinamento do World Model
             loss_train_history, loss_test_history, reward_train_history, reward_test_history = train_world_model(
-                epochs_wm_behavior, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer, writer)
+                epochs_wm_behavior, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer)
             
-            # Registra as métricas do world model no TensorBoard
+            # Registra as métricas do world model no wandb
             for epoch in range(epochs_wm_behavior):
-                global_epoch = iteration * epochs_wm_behavior + epoch
-                writer.add_scalar("WorldModel/TrainLoss", loss_train_history[epoch], global_epoch)
-                writer.add_scalar("WorldModel/TestLoss", loss_test_history[epoch], global_epoch)
-                writer.add_scalar("WorldModel/RewardTrainLoss", reward_train_history[epoch], global_epoch)
-                writer.add_scalar("WorldModel/RewardTestLoss", reward_test_history[epoch], global_epoch)
+                log_wandb({
+                    "WorldModel/TrainLoss": loss_train_history[epoch],
+                    "WorldModel/TestLoss": loss_test_history[epoch],
+                    "WorldModel/RewardTrainLoss": reward_train_history[epoch],
+                    "WorldModel/RewardTestLoss": reward_test_history[epoch]
+                })
             
             # Treinamento do comportamento (Actor e ValueNet)
             epochs_behavior = epochs_wm_behavior
@@ -95,11 +152,12 @@ def main():
                 epochs_behavior=epochs_behavior
             )
             
-            # Registra as métricas do comportamento no TensorBoard
+            # Registra as métricas do comportamento no wandb
             for epoch in range(epochs_behavior):
-                global_epoch = iteration * epochs_behavior + epoch
-                writer.add_scalar("Behavior/ActorLoss", actor_loss_history[epoch], global_epoch)
-                writer.add_scalar("Behavior/ValueLoss", value_loss_history[epoch], global_epoch)
+                log_wandb({
+                    "Behavior/ActorLoss": actor_loss_history[epoch],
+                    "Behavior/ValueLoss": value_loss_history[epoch]
+                })
         
         # INTERAÇÃO COM O AMBIENTE
         print(f"Coletando interação {iteration+1} no ambiente")
@@ -114,16 +172,15 @@ def main():
         ep_rewards = 0
 
         while steps_done < steps:
-            # Converte a observação para tensor com shape (1, 1, 84, 84)
             obs_tensor = torch.tensor(obs_atual).view(1, 1, 84, 84).to(device)
-            conv_out = world_model.autoencoder.encoder_conv(obs_tensor)  # (1, 64, 21, 21)
-            conv_out = conv_out.view(conv_out.size(0), -1)               # (1, 28224)
+            conv_out = world_model.autoencoder.encoder_conv(obs_tensor)  # (1, C, H, W)
+            conv_out = conv_out.view(conv_out.size(0), -1)
             latent = world_model.autoencoder.encoder_fc(conv_out)        # (1, latent_dim)
             
-            action_tensor = actor(latent)
+            dist, mean, std = actor(latent)
+            action_tensor = dist.rsample() 
             action_np = action_tensor.detach().cpu().numpy()[0]
             
-            # TODO: Estratégia de exploração
             time_step = env.step(action_np)
             done = time_step.last()
             reward = time_step.reward if time_step.reward is not None else 0.0
@@ -153,7 +210,7 @@ def main():
             
         rewards_history.append(ep_rewards)
         print(f"Recompensa acumulada = {ep_rewards:.2f}")
-        writer.add_scalar("Reward/Episode", ep_rewards, iteration)
+        log_wandb({"Reward/Episode": ep_rewards})
         
         # Registra um histograma da distribuição do vetor latente para o primeiro batch
         for batch in test_loader:
@@ -164,30 +221,36 @@ def main():
             conv_out = world_model.autoencoder.encoder_conv(obs)
             conv_out = conv_out.view(conv_out.size(0), -1)
             latent = world_model.autoencoder.encoder_fc(conv_out)
-            writer.add_histogram("Latent/Distribution", latent, iteration)
+            log_wandb({"Latent/Distribution": wandb.Histogram(latent.cpu().detach().numpy())})
             break  
+
+        # Salva um checkpoint para retomar o treinamento futuramente
+        checkpoint = {
+            "iteration": iteration + 1,
+            "world_model_state": world_model.state_dict(),
+            "actor_state": actor.state_dict(),
+            "value_net_state": value_net.state_dict(),
+            "optimizer_world_model": wm_optimizer.state_dict(),
+            "optimizer_actor": actor_optimizer.state_dict(),
+            "optimizer_value_net": value_optimizer.state_dict()
+        }
+        os.makedirs(repositorio, exist_ok=True)
+        torch.save(checkpoint, os.path.join(repositorio, "checkpoint.pth"))
+        
+        if iteration % 100 == 0:
+            torch.save(world_model.state_dict(), os.path.join(repositorio, "world_model_weights.pth"))
+            torch.save(actor.state_dict(), os.path.join(repositorio, "actor_weights.pth"))
+            torch.save(value_net.state_dict(), os.path.join(repositorio, "value_net_weights.pth"))
+            print("Model weights saved")
     
     print("\nTreinamento finalizado para essa fase!")
     
-    torch.save(world_model.state_dict(), f"{repositorio}/world_model_weights.pth")
-    torch.save(actor.state_dict(), f"{repositorio}/actor_weights.pth")
-    torch.save(value_net.state_dict(), f"{repositorio}/value_net_weights.pth")
-    print("Model weights saved'")
+    torch.save(world_model.state_dict(), os.path.join(repositorio, "world_model_weights.pth"))
+    torch.save(actor.state_dict(), os.path.join(repositorio, "actor_weights.pth"))
+    torch.save(value_net.state_dict(), os.path.join(repositorio, "value_net_weights.pth"))
+    print("Model weights saved")
     
-        
-    hyperparameters = {
-        'height': HEIGHT,
-        'width': WIDTH,
-        'Hidden dimension': hidden_dim,
-        'Latent dimension': latent_dim,
-        'batch_size': batch_size,
-        'íterations': num_iterations,
-        'Update Steps': update_step
-}
-
-    writer.add_hparams(hyperparameters)
-    
-    writer.close()
+    wandb.finish()
 
 if __name__ == "__main__":
     main()

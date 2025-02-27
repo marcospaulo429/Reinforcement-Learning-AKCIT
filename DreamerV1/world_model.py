@@ -10,7 +10,7 @@ from dm_control.suite.wrappers import pixels
 from auxiliares import  get_data_loaders_from_replay_buffer, denormalize, training_device
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
-
+import wandb
 
 
 class DreamerWorldModel(nn.Module):
@@ -122,7 +122,7 @@ def visualize_autoencoder(autoencoder, test_loader, device, HEIGHT, WIDTH, num_s
     plt.tight_layout()
     plt.show()
 
-def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer, writer): 
+def train_world_model(num_epochs, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer): 
 
     reward_train_history = []
     reward_test_history = []
@@ -186,13 +186,18 @@ def train_world_model(num_epochs, world_model, train_loader, test_loader, device
                 prev_hidden = torch.zeros(batch_size_, hidden_dim, device=device)
                 latent_next, hidden, mean, std, reward_pred, recon_next = world_model(obs, action, prev_hidden)
                 
-                if i == 0:
+                """if i == 0: #TODO
+                    # Seleciona as 10 primeiras imagens reais e reconstruídas
                     real_imgs = next_obs[:10]
                     recon_imgs = recon_next[:10]
+                    # Cria uma grid (opcionalmente você pode usar make_grid do torchvision)
                     grid_real = make_grid(real_imgs, nrow=5, normalize=True, scale_each=True)
                     grid_recon = make_grid(recon_imgs, nrow=5, normalize=True, scale_each=True)
-                    writer.add_image("Real Images", grid_real, epoch)
-                    writer.add_image("Reconstructed Images", grid_recon, epoch)
+                    # Loga as imagens no wandb usando wandb.Image
+                    wandb.log({
+                        "Real Images": wandb.Image(grid_real),
+                        "Reconstructed Images": wandb.Image(grid_recon)
+                    }) """
             
                 recon_loss = mse_loss(recon_next, next_obs)
                 reward_loss = mse_loss(reward_pred, reward)
