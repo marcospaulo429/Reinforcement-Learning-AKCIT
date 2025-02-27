@@ -6,32 +6,10 @@ import gymnasium as gym
 from replay_buffer import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import TensorDataset
+from models_dreamer import ActionModel, ValueNet
+from auxiliares import training_device
 
-class Actor(nn.Module):
-    def __init__(self, latent_dim, action_dim):
-        super(Actor, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(latent_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, action_dim),
-            nn.Tanh()  # ações em [-1,1]
-        )
-    def forward(self, latent):
-        return self.net(latent)
 
-class ValueNet(nn.Module):
-    def __init__(self, latent_dim):
-        super(ValueNet, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(latent_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1)
-        )
-    def forward(self, latent):
-        return self.net(latent)
-    
 def extract_latent_sequences(world_model, replay_buffer, device):
     """
     Percorre o replay_buffer original (com observações/imagens) e gera
@@ -117,23 +95,35 @@ def imagine_rollout(world_model, actor, initial_latent, initial_hidden, horizon=
     latent = initial_latent
 
     for t in range(horizon):
-        action = actor(latent)
-        # Avança o estado latente
-        latent, hidden, mean, std = world_model.transition_model(hidden, latent, action)
+        # Obter distribuição, média e std a partir do ator
+        dist, mean, std = actor(latent)
+        # Amostrar ação via reparametrização
+        action = dist.rsample()
+        
+        # Avança o estado latente usando a transição do world_model
+        # Supondo que a função 'transition_model' retorna (novo_latent, novo_hidden, mean, std)
+        latent, hidden, trans_mean, trans_std = world_model.transition_model(hidden, latent, action)
+        
+        # Previsão da recompensa para o estado latente atual
         r = world_model.reward_model(latent)
+        
         latents.append(latent)
         rewards.append(r)
     
+    # Cálculo do retorno descontado (rollout)
     returns = []
     ret = torch.zeros_like(rewards[-1])
     for r in reversed(rewards):
         ret = r + gamma * ret
         returns.insert(0, ret)
     
-    latents = torch.stack(latents, dim=0)   # (H, B, lat_dim)
-    rewards = torch.stack(rewards, dim=0)   # (H, B, 1) ou algo assim
-    returns = torch.stack(returns, dim=0)   # (H, B, 1)
+    # Concatena as listas para tensores com shape (horizon, batch, ...)
+    latents = torch.stack(latents, dim=0)
+    rewards = torch.stack(rewards, dim=0)
+    returns = torch.stack(returns, dim=0)
+    
     return latents, rewards, returns
+
 
    
 def behavior_learning(
@@ -165,73 +155,35 @@ def behavior_learning(
             hidden_dim = world_model.transition_model.gru.hidden_size
             hidden_init = torch.zeros(batch_size, hidden_dim, device=device)
 
-            # Gera rollout imaginado no espaço latente a partir de s_t (latents)
-            # latents_imag.shape = (horizon, batch_size, latent_dim)
-            # rewards_imag.shape = (horizon, batch_size, 1)
-            # [Podemos ignorar 'done' se seu world_model não modela terminação]
+            # Gera rollout imaginado a partir dos estados latentes atuais
             latents_imag, rewards_imag, _ = imagine_rollout(
                 world_model, actor, latents, hidden_init, horizon, gamma
             )
 
-            # -------------------------------------------------------------
-            # Cálculo do λ-return: para cada t no rollout, calculamos o alvo
-            # para o value_net (que chamaremos de target_value[t]).
-            # No Dreamer, costuma-se fazer:  V_λ(s_t) = (1-λ) * sum(λ^k * n-step) + ...
-            # Aqui faremos algo mais direto: para t = H-1..0 (backward):
-            #   G[t] = r[t] + gamma * [(1-lambda) * V(s_{t+1}) + lambda * G[t+1]]
-            #   target_value[t] = G[t]
-            # (onde V(s_{t+1}) é a predição do value_net no próximo estado imaginado)
-            # -------------------------------------------------------------
-
-            # Prepara tensores para armazenar os targets
-            # shape: (horizon, batch_size, 1)
+            # Cálculo do λ-return para o value net
             target_values = torch.zeros(horizon, batch_size, 1, device=device)
-
-            # Para o último passo do rollout, bootstrap do value_net
-            # (poderia ser zero se quiser horizon "fixo", mas Dreamer normalmente faz bootstrap)
-            v_next = value_net(latents_imag[-1])  # V(s_{H-1})
-            target_values[-1] = rewards_imag[-1] + gamma * v_next * (1 - lam)  \
-                                + gamma * lam * v_next  # ou simplifique se preferir
-
-            # Retropropaga do penúltimo passo até o primeiro
+            v_next = value_net(latents_imag[-1])
+            target_values[-1] = rewards_imag[-1] + gamma * v_next * (1 - lam) + gamma * lam * v_next
+            
             for t in reversed(range(horizon - 1)):
-                v_next = value_net(latents_imag[t + 1])  # V(s_{t+1})
-                target_values[t] = rewards_imag[t] + gamma * (
-                    (1 - lam) * v_next + lam * target_values[t + 1]
-                )
-
-            # -------------------------------------------------------------
-            # LOSS DO VALUE NET:
-            # Fazemos MSE entre V(s_t) e target_values[t] para cada t
-            # -------------------------------------------------------------
+                v_next = value_net(latents_imag[t + 1])
+                target_values[t] = rewards_imag[t] + gamma * ((1 - lam) * v_next + lam * target_values[t + 1])
+            
+            # LOSS DO VALUE NET
             value_loss = 0.0
             for t in range(horizon):
                 v_pred = value_net(latents_imag[t])
                 value_loss += mse_loss(v_pred, target_values[t])
             value_loss /= horizon
 
-            # Otimiza o value_net
             value_optimizer.zero_grad()
             value_loss.backward(retain_graph=True)
             value_optimizer.step()
 
-            # -------------------------------------------------------------
-            # LOSS DO ACTOR:
-            # O ator é otimizado para maximizar a soma dos valores previstos
-            # ou, equivalentemente, minimizar a negativa dessa soma.
-            # (No Dreamer, também se usa "policy entropy" e outras regularizações.)
-            # Aqui: actor_loss = - mean( V(s_t) ) ao longo do rollout.
-            # -------------------------------------------------------------
-            # Podemos usar a média dos V(s_t) ou a média dos targets G[t].
-            # O Dreamer normalmente faz backprop via V(s_t) (que depende das ações
-            # escolhidas no rollout) e *não* desconecta o grafo, permitindo
-            # gradientes fluírem pelo world_model e ator.
-            # Ex: actor_loss = - (1/horizon) * sum_{t=0..H-1} V(s_t)
-            # ou, se quiser, use 'target_values[t]' sem grad (mas isso não backprop
-            # pelo modelo dinâmico).
-            # Abaixo, uso V(s_t) para permitir gradiente analítico:
+            # LOSS DO ACTOR
             actor_loss = 0.0
             for t in range(horizon):
+                # Usamos a predição do value net para guiar o ator
                 actor_loss += -value_net(latents_imag[t]).mean()
             actor_loss /= horizon
 
@@ -255,75 +207,77 @@ def behavior_learning(
 
 
 
-
 def select_action(actor, state):
-    state = torch.FloatTensor(state).unsqueeze(0)
-    logits = actor(state)                     # Saída sem Tanh, logits livres
-    action_prob = torch.softmax(logits, dim=-1) # Converte para distribuição de probabilidade
-    action = torch.multinomial(action_prob, num_samples=1)
-    return action.item(), action_prob[0, action.item()]
+    """
+    Dado o estado (vetorial), retorna a ação contínua e seu log-prob.
+    """
+    state_t = torch.FloatTensor(state).unsqueeze(0)  # [1, state_dim]
+    dist, mean, std = actor(state_t)
+    # Usamos rsample para permitir backprop (reparametrização)
+    action_t = dist.rsample()  
+    log_prob = dist.log_prob(action_t).sum(dim=-1)
+    action = action_t.detach().cpu().numpy()[0]
+    return action, log_prob
 
 
 
 def main():
-    env = gym.make('CartPole-v1')
-    obs_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.n
-    latent_dim = obs_dim  
+    device = training_device()
+    env = gym.make('Pendulum-v1')
+    max_episode_steps = 300
+    obs_dim = env.observation_space.shape[0]   # geralmente 3 para Pendulum
+    action_dim = env.action_space.shape[0]       # 1 dimensão
+    latent_dim = obs_dim  # Aqui, tratamos o estado observado como latente
 
-    actor = Actor(latent_dim, action_dim)
+    actor = ActionModel(latent_dim, action_dim)
     value_net = ValueNet(latent_dim)
 
-    actor_optimizer = optim.Adam(actor.parameters(), lr=1e-3)
-    value_optimizer = optim.Adam(value_net.parameters(), lr=1e-3)
+    actor_optimizer = optim.Adam(actor.parameters(), lr=1e-5)
+    value_optimizer = optim.Adam(value_net.parameters(), lr=1e-5)
     mse_loss = nn.MSELoss()
     gamma = 0.99
-    num_episodes = 300
-    repositorio = "behavior/model_3"
-
-    writer = SummaryWriter(repositorio)
+    num_episodes = 1000
+    repo = "behavior/model_continuous_1"
+    writer = SummaryWriter(repo)
+    print("Começando episodios")
 
     for episode in range(num_episodes):
+        print(episode)
         state, _ = env.reset()
         done = False
         total_reward = 0
         step_count = 0
 
-        while not done:
+        while not (done or (step_count==max_episode_steps)):
+            
             step_count += 1
 
-            # 1) Seleciona ação da política
-            action, action_prob = select_action(actor, state)
-            log_prob = torch.log(action_prob)
-
-            # Executa ação
-            next_state, reward, done, _, _ = env.step(action)
+            # Seleciona ação a partir do ator (distribuição contínua)
+            action, log_prob = select_action(actor, state)
+            next_state, reward, done, truncated, _ = env.step(action)
             total_reward += reward
 
-            # Converte para tensores
+            # Converte estados para tensores
             state_t = torch.FloatTensor(state).unsqueeze(0)
             next_state_t = torch.FloatTensor(next_state).unsqueeze(0)
 
-            # 2) Calcula V(s) e V(s')
-            value_s = value_net(state_t)            # Valor atual
+            # Calcula V(s) e V(s')
+            value_s = value_net(state_t)
             with torch.no_grad():
-                value_sp = value_net(next_state_t)  # Valor próximo estado
-                if done:  # se episódio acabou, não há valor futuro
-                    value_sp = torch.zeros_like(value_sp)
+                value_next = value_net(next_state_t)
+                if done or truncated:
+                    value_next = torch.zeros_like(value_next)
+            
+            # TD target: r + γ V(s')
+            td_target = torch.FloatTensor([[reward]]) + gamma * value_next
 
-            # TD Target = r + γ V(s')
-            td_target = reward + gamma * value_sp
+            # Vantagem: TD error
+            advantage = td_target - value_s
 
-            # 3) Vantagem
-            advantages = td_target - value_s
-            #normalizacxao pois a loss dos value estava muito alta
+            # Loss do ator: maximiza valor (minimiza -log_prob * advantage)
+            actor_loss = -log_prob * advantage.detach()
 
-
-            # 4) Perda do ator = -log_prob * advantage
-            # (detach para não retropropagar pelo crítico)
-            actor_loss = -log_prob * advantages.detach()
-
-            # 5) Perda do crítico = MSE(V(s), td_target)
+            # Loss do crítico: MSE entre V(s) e TD target
             value_loss = mse_loss(value_s, td_target)
 
             # Otimização
@@ -334,14 +288,13 @@ def main():
             actor_optimizer.step()
             value_optimizer.step()
 
-            # Atualiza estado
             state = next_state
 
-        writer.add_scalar(f"reward", total_reward, episode)
-        writer.add_scalar("actor_loss", actor_loss, episode)
-        writer.add_scalar("value_loss", value_loss, episode)
-        
-    
+        writer.add_scalar("reward", total_reward, episode)
+        writer.add_scalar("actor_loss", actor_loss.item(), episode)
+        writer.add_scalar("value_loss", value_loss.item(), episode)
+        print(f"Episode {episode+1}/{num_episodes} | Reward: {total_reward:.2f}")
+
     print("Treinamento terminado")
     env.close()
     writer.close()
