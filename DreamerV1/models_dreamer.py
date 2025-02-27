@@ -128,13 +128,13 @@ class ActionModel(nn.Module):
         super().__init__()
         # Rede densa de 3 camadas (300 neurônios ELU cada) para mapear estado latente -> parâmetros de ação
         self.net = nn.Sequential(
-            nn.Linear(state_dim, 300), nn.ELU(),
-            nn.Linear(300, 300), nn.ELU(),
-            nn.Linear(300, 300), nn.ELU()
+            nn.Linear(state_dim, 200), nn.ELU(),
+            nn.Linear(200, 200), nn.ELU(),
+            nn.Linear(200, 200), nn.ELU()
         )
         # Camadas finais separadas para média e desvio padrão (log-variância) da ação
-        self.mean_head = nn.Linear(300, action_dim)
-        self.std_head  = nn.Linear(300, action_dim)
+        self.mean_head = nn.Linear(200, action_dim)
+        self.std_head  = nn.Linear(200, action_dim)
         # Escala máxima para ações (fator de saturação, ex: 5)
         self.action_scale = 5.0
 
@@ -165,10 +165,10 @@ class ActionModel(nn.Module):
 class ValueNet(nn.Module):
     def __init__(self, latent_dim):
         super(ValueNet, self).__init__()
-        self.fc1 = nn.Linear(latent_dim, 300)
-        self.fc2 = nn.Linear(300, 300)
-        self.fc3 = nn.Linear(300, 300)
-        self.value_layer = nn.Linear(300, 1)
+        self.fc1 = nn.Linear(latent_dim, 200)
+        self.fc2 = nn.Linear(200, 200)
+        self.fc3 = nn.Linear(200, 200)
+        self.value_layer = nn.Linear(200, 1)
 
     def forward(self, latent):
         x = F.elu(self.fc1(latent))

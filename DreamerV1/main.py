@@ -60,16 +60,16 @@ def main():
     hidden_dim = 256
     input_size = HEIGHT * WIDTH
     latent_dim = 256
-    batch_size = 512
+    batch_size = 1250
     epochs_wm_behavior = 5
     num_iterations = 1000
     update_step = 1
-    repositorio = "dreamer/model_11"
+    repositorio = "dreamer/model_15"
     device = training_device()
     print("Usando device:", device)
     
     # Inicializa o wandb e configura os hiperparâmetros
-    wandb.init(project="dreamer1", config={
+    wandb.init(project="dreamer_14", config={
         "HEIGHT": HEIGHT,
         "WIDTH": WIDTH,
         "hidden_dim": hidden_dim,
@@ -83,7 +83,7 @@ def main():
     # (Opcional) Definição de métrica customizada – se necessário
     wandb.define_metric("Reward/Episode", step_metric="global_step", summary="max")
     
-    env = suite.load(domain_name="cartpole", task_name="balance")
+    env = suite.load(domain_name="cartpole", task_name="swingup")
     env = pixels.Wrapper(env, pixels_only=True,
                          render_kwargs={'height': HEIGHT, 'width': WIDTH, 'camera_id': 0})
     
@@ -105,10 +105,11 @@ def main():
     value_optimizer = optim.Adam(value_net.parameters(), lr=8e-5)
     
     # (Opcional) Tenta carregar um checkpoint
-    #checkpoint_path = os.path.join(repositorio, "checkpoint.pth")
-    #start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
-    #                                  wm_optimizer, actor_optimizer, value_optimizer)
     start_iteration = 0  # Inicia do zero, se não usar checkpoint
+
+    checkpoint_path = os.path.join(repositorio, "dreamer/model_11")
+    start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
+                                      wm_optimizer, actor_optimizer, value_optimizer)
     
     rewards_history = []
     
