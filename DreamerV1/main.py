@@ -52,7 +52,6 @@ def load_checkpoint(checkpoint_path, world_model, actor, value_net,
         print("Nenhum checkpoint encontrado. Iniciando treinamento do zero.")
         return 0
 
-# --- Função main ---
 def main():
     HEIGHT = 84
     WIDTH = 84
@@ -63,7 +62,7 @@ def main():
     epochs_wm_behavior = 5
     num_iterations = 1000
     update_step = 1
-    repositorio = "dreamer/model_15"
+    repositorio = "dreamer/model_16"
     device = training_device()
     print("Usando device:", device)
     
@@ -83,17 +82,17 @@ def main():
     
     actor = ActionModel(latent_dim, action_dim).to(device)
     value_net = ValueNet(latent_dim).to(device)
-    actor_optimizer = optim.Adam(actor.parameters(), lr=8e-5)
+    actor_optimizer = optim.Adam(actor.parameters(), lr=8e-4)
     value_optimizer = optim.Adam(value_net.parameters(), lr=8e-5)
     
     start_iteration = 0  # Inicia do zero, se não usar checkpoint
 
-    checkpoint_path = os.path.join(repositorio, "checkpoint.pth")
-    start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
-                                      wm_optimizer, actor_optimizer, value_optimizer)
+    #checkpoint_path = os.path.join(repositorio, "checkpoint.pth")
+    #start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
+    #                                 wm_optimizer, actor_optimizer, value_optimizer)
     
     # Inicializa o wandb e configura os hiperparâmetros
-    wandb.init(project="dreamer_14", config={
+    wandb.init(project="dreamer_1", config={
         "HEIGHT": HEIGHT,
         "WIDTH": WIDTH,
         "hidden_dim": hidden_dim,
@@ -121,10 +120,10 @@ def main():
             print(f"\nUpdate Step {it+1}/{update_step} da iteração {iteration+1}/{num_iterations}")
             
             
-            if iteration % 15 == 0:
+            if (iteration < 10) or (iteration % 15 == 0):
                 # Treinamento do World Model
                 loss_train_history, loss_test_history, reward_train_history, reward_test_history = train_world_model(
-                    15, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer)
+                    7, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer)
                 
                 # Registra as métricas do world model no wandb
                 for epoch in range(epochs_wm_behavior):

@@ -45,10 +45,10 @@ class ActionModel(nn.Module):
 class ValueNet(nn.Module):
     def __init__(self, latent_dim):
         super(ValueNet, self).__init__()
-        self.fc1 = nn.Linear(latent_dim, 200)
-        self.fc2 = nn.Linear(200, 200)
-        self.fc3 = nn.Linear(200, 200)
-        self.value_layer = nn.Linear(200, 1)
+        self.fc1 = nn.Linear(latent_dim, 300)
+        self.fc2 = nn.Linear(300, 300)
+        self.fc3 = nn.Linear(300, 300)
+        self.value_layer = nn.Linear(300, 1)
 
     def forward(self, latent):
         x = F.elu(self.fc1(latent))
