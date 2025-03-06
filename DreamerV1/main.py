@@ -62,7 +62,7 @@ def main():
     epochs_wm_behavior = 5
     num_iterations = 1000
     update_step = 1
-    repositorio = "dreamer/model_16"
+    repositorio = "dreamer/model_17"
     device = training_device()
     print("Usando device:", device)
     
@@ -76,7 +76,7 @@ def main():
     
     # Carrega o World Model treinado
     world_model = DreamerWorldModel(input_size, latent_dim, action_dim, hidden_dim).to(device)
-    world_model.load_state_dict(torch.load("dreamer/model_15/world_model_weights.pth"))
+    world_model.load_state_dict(torch.load("dreamer/model_16/world_model_weights.pth"))
     wm_optimizer = optim.Adam(world_model.parameters(), lr=6e-4)
     mse_loss = nn.MSELoss()
     
@@ -87,12 +87,12 @@ def main():
     
     start_iteration = 0  # Inicia do zero, se não usar checkpoint
 
-    #checkpoint_path = os.path.join(repositorio, "checkpoint.pth")
-    #start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
-    #                                 wm_optimizer, actor_optimizer, value_optimizer)
+    checkpoint_path = os.path.join(repositorio, "checkpoint.pth")
+    start_iteration = load_checkpoint(checkpoint_path, world_model, actor, value_net,
+                                     wm_optimizer, actor_optimizer, value_optimizer)
     
     # Inicializa o wandb e configura os hiperparâmetros
-    wandb.init(project="dreamer_1", config={
+    wandb.init(project="dreamer_2", config={
         "HEIGHT": HEIGHT,
         "WIDTH": WIDTH,
         "hidden_dim": hidden_dim,

@@ -91,38 +91,43 @@ def create_latent_dataset(latent_buffer):
 def imagine_rollout(world_model, actor, initial_latent, initial_hidden, horizon=5, gamma=0.99):
     latents = []
     rewards = []
+    log_probs = []
+    entropies = []
     hidden = initial_hidden
     latent = initial_latent
 
     for t in range(horizon):
-        # Obter distribuição, média e std a partir do ator
+        # Obter a distribuição do ator para o estado latente atual
         dist, mean, std = actor(latent)
-        # Amostrar ação via reparametrização
+        # Amostrar ação com reparametrização
         action = dist.rsample()
+        # Calcular log probability e entropia
+        log_prob = dist.log_prob(action).sum(dim=-1, keepdim=True)
+        entropy = dist.base_dist.entropy().sum(dim=-1, keepdim=True)
+        log_probs.append(log_prob)
+        entropies.append(entropy)
         
-        # Avança o estado latente usando a transição do world_model
-        # Supondo que a função 'transition_model' retorna (novo_latent, novo_hidden, mean, std)
+        # Avança o estado latente usando o modelo de transição
         latent, hidden, trans_mean, trans_std = world_model.transition_model(hidden, latent, action)
-        
-        # Previsão da recompensa para o estado latente atual
+        # Previsão da recompensa
         r = world_model.reward_model(latent)
-        
         latents.append(latent)
         rewards.append(r)
     
-    # Cálculo do retorno descontado (rollout)
+    # Cálculo dos retornos (neste exemplo, sem bootstrapping com V(s_H))
     returns = []
     ret = torch.zeros_like(rewards[-1])
     for r in reversed(rewards):
         ret = r + gamma * ret
         returns.insert(0, ret)
     
-    # Concatena as listas para tensores com shape (horizon, batch, ...)
-    latents = torch.stack(latents, dim=0)
-    rewards = torch.stack(rewards, dim=0)
-    returns = torch.stack(returns, dim=0)
+    latents = torch.stack(latents, dim=0)   # [horizon, batch, latent_dim]
+    rewards = torch.stack(rewards, dim=0)     # [horizon, batch, 1]
+    returns = torch.stack(returns, dim=0)     # [horizon, batch, 1]
+    log_probs = torch.stack(log_probs, dim=0) # [horizon, batch, 1]
+    entropies = torch.stack(entropies, dim=0) # [horizon, batch, 1]
     
-    return latents, rewards, returns
+    return latents, rewards, returns, log_probs, entropies
 
 
    
@@ -156,9 +161,26 @@ def behavior_learning(
             hidden_init = torch.zeros(batch_size, hidden_dim, device=device)
 
             # Gera rollout imaginado a partir dos estados latentes atuais
-            latents_imag, rewards_imag, _ = imagine_rollout(
+            latents_imag, rewards_imag, target_values, log_probs, entropies = imagine_rollout(
                 world_model, actor, latents, hidden_init, horizon, gamma
             )
+            
+            # Calcula as vantagens para cada timestep: target - V(s)
+            advantages = []
+            for t in range(horizon):
+                v_pred = value_net(latents_imag[t])
+                advantage = target_values[t] - v_pred
+                advantages.append(advantage)
+            advantages = torch.stack(advantages, dim=0)  # [horizon, batch, 1]
+
+            # Normaliza as vantagens para cada timestep separadamente sobre o batch
+            advantages_norm = []
+            for t in range(horizon):
+                adv = advantages[t]
+                adv_mean = adv.mean()
+                adv_std = adv.std() + 1e-8
+                advantages_norm.append((adv - adv_mean) / adv_std)
+            advantages_norm = torch.stack(advantages_norm, dim=0)  # [horizon, batch, 1]
 
             # Cálculo do λ-return para o value net
             target_values = torch.zeros(horizon, batch_size, 1, device=device)
@@ -177,18 +199,24 @@ def behavior_learning(
             value_loss /= horizon
 
             value_optimizer.zero_grad()
-            value_loss.backward(retain_graph=True)
+            torch.nn.utils.clip_grad_norm_(value_net.parameters(), max_norm=10.0)
             value_optimizer.step()
 
-            # LOSS DO ACTOR
+            # Coeficiente de entropia (hiperparâmetro)
+            entropy_coef = 0.01
+
+            # Calcula a loss do ator com base no log_prob ponderado pela vantagem normalizada e
+            # adiciona a regularização de entropia
             actor_loss = 0.0
             for t in range(horizon):
-                # Usamos a predição do value net para guiar o ator
-                actor_loss += -value_net(latents_imag[t]).mean()
+                # Negativo para maximizar a vantagem
+                loss_t = - (log_probs[t] * advantages_norm[t]).mean() - entropy_coef * entropies[t].mean()
+                actor_loss += loss_t
             actor_loss /= horizon
 
             actor_optimizer.zero_grad()
             actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=10.0)
             actor_optimizer.step()
 
             epoch_value_loss += value_loss.item()
