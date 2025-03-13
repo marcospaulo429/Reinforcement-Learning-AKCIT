@@ -1,12 +1,7 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
-import random
-from torch.utils.data import TensorDataset, DataLoader
 from PIL import Image
 import matplotlib.pyplot as plt
-from torch.utils.data import TensorDataset, DataLoader
 
 def training_device():
     if torch.mps.is_available():
@@ -30,62 +25,6 @@ def converter_cinza(pixels_arr):
     img = Image.fromarray(pixels_arr)
     img_gray = img.convert("L")
     return np.array(img_gray)
-
-def get_data_loaders_from_replay_buffer(replay_buffer, batch_size=64, test_split=0.1, HEIGHT=84, WIDTH=84, action_dim=1):
-    """
-    Extrai dados do replay_buffer para treinamento supervisionado do World Model.
-    Cada exemplo contém: obs, action, reward, next_obs.
-    As imagens (obs e next_obs) estão em formato (HEIGHT, WIDTH) e são flattenadas para (HEIGHT*WIDTH).
-    Garante que o array de ação tenha shape (N, action_dim).
-    """
-    obs_list = []
-    action_list = []
-    reward_list = []
-    next_obs_list = []
-    
-    for ep in replay_buffer.buffer:
-        for step in ep:
-            obs_list.append(step["obs"])
-            action_list.append(step["action"])
-            reward_list.append(step["reward"])
-            next_obs_list.append(step["next_obs"])
-    
-    # Converte para arrays NumPy
-    obs_array = np.array(obs_list)           # (N, HEIGHT, WIDTH)
-    next_obs_array = np.array(next_obs_list)   # (N, HEIGHT, WIDTH)
-    obs_array = obs_array.astype(np.float32)
-    next_obs_array = next_obs_array.astype(np.float32)
-    
-    # (N, HEIGHT, WIDTH) -> (N, HEIGHT*WIDTH)
-    N, H, W = obs_array.shape
-    obs_array = obs_array.reshape(N, H * W)
-    next_obs_array = next_obs_array.reshape(N, H * W)
-    
-    action_array = np.array(action_list).astype(np.float32)
-    # array passa a ter (N, action_dim)
-    action_array = action_array.reshape(-1, action_dim)
-    
-    reward_array = np.array(reward_list).astype(np.float32).reshape(-1, 1)
-    
-    dataset = TensorDataset(torch.tensor(obs_array),
-                            torch.tensor(action_array),
-                            torch.tensor(reward_array),
-                            torch.tensor(next_obs_array))
-    
-    indices = np.arange(N)
-    np.random.shuffle(indices)
-    split = int((1 - test_split) * N)
-    train_indices = indices[:split]
-    test_indices = indices[split:]
-    
-    train_dataset = torch.utils.data.Subset(dataset, train_indices)
-    test_dataset = torch.utils.data.Subset(dataset, test_indices)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
-    return train_loader, test_loader
-
 
 def ver_reconstrucoes(world_model, test_loader, device, input_size, num_samples=10, 
                       action_dim=1, hidden_dim=256, HEIGHT=32, WIDTH=32):
