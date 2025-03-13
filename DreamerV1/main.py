@@ -218,7 +218,7 @@ def main():
             break  
 
         # Salva checkpoint
-        checkpoint = {
+        """checkpoint = {
             "iteration": iteration + 1,
             "world_model_state": world_model.state_dict(),
             "actor_state": actor.state_dict(),
@@ -234,13 +234,13 @@ def main():
             torch.save(world_model.state_dict(), os.path.join(repositorio, "world_model_weights.pth"))
             torch.save(actor.state_dict(), os.path.join(repositorio, "actor_weights.pth"))
             torch.save(value_net.state_dict(), os.path.join(repositorio, "value_net_weights.pth"))
-            print("Model weights saved")
+            print("Model weights saved")"""
     
     print("\nTreinamento finalizado para essa fase!")
-    torch.save(world_model.state_dict(), os.path.join(repositorio, "world_model_weights.pth"))
+    """torch.save(world_model.state_dict(), os.path.join(repositorio, "world_model_weights.pth"))
     torch.save(actor.state_dict(), os.path.join(repositorio, "actor_weights.pth"))
     torch.save(value_net.state_dict(), os.path.join(repositorio, "value_net_weights.pth"))
-    print("Model weights saved")
+    print("Model weights saved")"""
     wandb.finish()
 
 if __name__ == "__main__":

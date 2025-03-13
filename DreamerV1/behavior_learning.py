@@ -1,13 +1,7 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
-import gymnasium as gym
 from replay_buffer import ReplayBuffer
-from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import TensorDataset
-from actor_critic import ActionModel, ValueNet
-from auxiliares import training_device
 
 def extract_latent_sequences(world_model, replay_buffer, device):
     """
