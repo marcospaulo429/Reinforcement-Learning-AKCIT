@@ -9,7 +9,6 @@ from torch.utils.data import TensorDataset
 from actor_critic import ActionModel, ValueNet
 from auxiliares import training_device
 
-
 def extract_latent_sequences(world_model, replay_buffer, device):
     """
     Percorre o replay_buffer original (com observações/imagens) e gera
@@ -17,20 +16,20 @@ def extract_latent_sequences(world_model, replay_buffer, device):
     """
     world_model.eval()
     
-    latent_buffer = ReplayBuffer()  # Buffer para guardar (s_lat, a, r, s_lat_next, ...)
+    latent_buffer = ReplayBuffer() 
 
     with torch.no_grad():
         for episode in replay_buffer.buffer:
             latent_episode = []
             
             hidden_dim = world_model.transition_model.gru.hidden_size
-            # Inicializa hidden como 2D: (batch, hidden_dim), onde batch=1
+            # Inicializa o estado oculto para um batch de tamanho 1
             hidden = torch.zeros(1, hidden_dim, device=device)
 
             for step in episode:
                 # Converte obs/action para tensores
                 obs_t = torch.tensor(step["obs"], dtype=torch.float32, device=device)
-                # Se obs_t for (84*84,), reshape para (1, 1, 84, 84) se necessário
+                # Se obs_t for (84*84,), reshape para (1, 1, 84, 84)
                 obs_t = obs_t.view(1, 1, 84, 84)
                 
                 action_t = torch.tensor(step["action"], dtype=torch.float32, device=device).unsqueeze(0)
@@ -41,11 +40,15 @@ def extract_latent_sequences(world_model, replay_buffer, device):
                 # Converte latent_next para CPU/Numpy para armazenar fora do PyTorch
                 latent_next_np = latent_next.squeeze(0).cpu().numpy()
 
+                # Armazena também o estado oculto
+                hidden_np = hidden.squeeze(0).cpu().numpy()
+
                 # Monta um dicionário para armazenar no novo buffer
                 latent_step = {
                     "latent": latent_next_np,
                     "action": step["action"],
                     "reward": step["reward"],
+                    "hidden": hidden_np,
                 }
                 latent_episode.append(latent_step)
             
@@ -56,88 +59,86 @@ def extract_latent_sequences(world_model, replay_buffer, device):
 
 
 def create_latent_dataset(latent_buffer):
-    # Converte cada episódio em arrays e concatena
+    """
+    Converte cada episódio em arrays e concatena para formar um TensorDataset
+    contendo latents, ações, recompensas e hiddens.
+    """
     latents = []
     actions = []
     rewards = []
-    latents_next = []
+    hiddens = []
 
     for ep in latent_buffer.buffer:
         for step in ep:
             latents.append(step["latent"])
             actions.append(step["action"])
             rewards.append(step["reward"])
-            # se estiver armazenando latent_next
-            if "latent_next" in step:
-                latents_next.append(step["latent_next"])
-            else:
-                latents_next.append(np.zeros_like(step["latent"]))  # dummy se não tiver
+            hiddens.append(step["hidden"])
 
     latents = np.array(latents, dtype=np.float32)
     actions = np.array(actions, dtype=np.float32)
     rewards = np.array(rewards, dtype=np.float32)
-    latents_next = np.array(latents_next, dtype=np.float32)
+    hiddens = np.array(hiddens, dtype=np.float32)
     
-    # Monta um TensorDataset
+    # Converte rewards para shape (N, 1)
+    rewards = np.expand_dims(rewards, axis=-1)
+    
     dataset = TensorDataset(
         torch.from_numpy(latents),
         torch.from_numpy(actions),
         torch.from_numpy(rewards),
-        torch.from_numpy(latents_next)
+        torch.from_numpy(hiddens)
     )
     return dataset
 
 
-def imagine_rollout(world_model, actor, initial_latent, initial_hidden, horizon=5, gamma=0.99):
+def imagine_rollout(world_model, actor, latent, hidden, horizon=5, gamma=0.99):
+    """
+    Realiza o rollout imaginado de forma vetorizada.
+    latent: tensor de shape (batch_size, latent_dim)
+    hidden: tensor de shape (batch_size, hidden_dim)
+    
+    Retorna:
+      - latents_imag: tensor de shape (horizon, batch_size, latent_dim)
+      - rewards_imag: tensor de shape (horizon, batch_size, 1)
+    """
+    batch_size = latent.size(0)
     latents = []
     rewards = []
-    hidden = initial_hidden
-    latent = initial_latent
 
     for t in range(horizon):
-        # Obter distribuição, média e std a partir do ator
-        dist, mean, std = actor(latent)
-        # Amostrar ação via reparametrização
-        action = dist.rsample()
+        # Obtém a distribuição do ator para cada latente do batch
+        dist, _, _ = actor(latent) 
+        action = dist.rsample()   
         
-        # Avança o estado latente usando a transição do world_model
-        # Supondo que a função 'transition_model' retorna (novo_latent, novo_hidden, mean, std)
-        latent, hidden, trans_mean, trans_std = world_model.transition_model(hidden, latent, action)
+        latent, hidden, _, _ = world_model.transition_model(hidden, latent, action)
         
-        # Previsão da recompensa para o estado latente atual
-        r = world_model.reward_model(latent)
+        r = world_model.reward_model(latent) 
         
         latents.append(latent)
         rewards.append(r)
     
-    # Cálculo do retorno descontado (rollout)
-    returns = []
-    ret = torch.zeros_like(rewards[-1])
-    for r in reversed(rewards):
-        ret = r + gamma * ret
-        returns.insert(0, ret)
+    latents_imag = torch.stack(latents, dim=0)    # (horizon, batch_size, latent_dim)
+    rewards_imag = torch.stack(rewards, dim=0)      # (horizon, batch_size, 1)
     
-    # Concatena as listas para tensores com shape (horizon, batch, ...)
-    latents = torch.stack(latents, dim=0)
-    rewards = torch.stack(rewards, dim=0)
-    returns = torch.stack(returns, dim=0)
-    
-    return latents, rewards, returns
+    return latents_imag, rewards_imag
 
 
-   
-def behavior_learning(
+def behavior_learning( #TODO: ver se funcoes de valor e modelo de actor-critic esta certo
     world_model, actor, value_net,
     latent_loader,
     device,
-    horizon=15,         # Tamanho do rollout imaginado
+    horizon=15,         
     gamma=0.99,
-    lam=0.95,           # Fator lambda para lambda-return
+    lam=0.95,          
     value_optimizer=None,
     actor_optimizer=None,
     mse_loss=None,
     epochs_behavior=10
 ):
+    """
+    Treina o ator e o value net utilizando rollouts imaginados a partir dos latentes.
+    """
     actor_loss_history = []
     value_loss_history = []
 
@@ -147,29 +148,30 @@ def behavior_learning(
         num_batches = 0
 
         for batch in latent_loader:
-            latents, actions, rewards, latents_next = batch
+            latents, actions, rewards, hiddens = batch
             latents = latents.to(device)
+            hiddens = hiddens.to(device)
             batch_size = latents.size(0)
 
-            # Inicializa estado oculto (GRU) para o rollout
-            hidden_dim = world_model.transition_model.gru.hidden_size
-            hidden_init = torch.zeros(batch_size, hidden_dim, device=device)
-
-            # Gera rollout imaginado a partir dos estados latentes atuais
-            latents_imag, rewards_imag, _ = imagine_rollout(
-                world_model, actor, latents, hidden_init, horizon, gamma
+            # Gera rollout imaginado de forma vetorizada a partir dos estados latentes atuais
+            latents_imag, rewards_imag = imagine_rollout(
+                world_model, actor, latents, hiddens, horizon, gamma
             )
+            # latents_imag: (horizon, batch_size, latent_dim)
+            # rewards_imag: (horizon, batch_size, 1)
 
-            # Cálculo do λ-return para o value net
+            # Cálculo do lambda-return para o value net
             target_values = torch.zeros(horizon, batch_size, 1, device=device)
-            v_next = value_net(latents_imag[-1])
-            target_values[-1] = rewards_imag[-1] + gamma * v_next * (1 - lam) + gamma * lam * v_next
+            with torch.no_grad():
+                # Bootstrap: valor do último latente
+                v_next = value_net(latents_imag[-1])
+                target_values[-1] = rewards_imag[-1] + gamma * v_next
+
+                for t in reversed(range(horizon - 1)):
+                    v_next = value_net(latents_imag[t + 1])
+                    target_values[t] = rewards_imag[t] + gamma * ((1 - lam) * v_next + lam * target_values[t + 1])
             
-            for t in reversed(range(horizon - 1)):
-                v_next = value_net(latents_imag[t + 1])
-                target_values[t] = rewards_imag[t] + gamma * ((1 - lam) * v_next + lam * target_values[t + 1])
-            
-            # LOSS DO VALUE NET
+            # Cálculo da loss do value net
             value_loss = 0.0
             for t in range(horizon):
                 v_pred = value_net(latents_imag[t])
@@ -178,17 +180,19 @@ def behavior_learning(
 
             value_optimizer.zero_grad()
             value_loss.backward(retain_graph=True)
+            torch.nn.utils.clip_grad_norm_(value_net.parameters(), max_norm=100)
             value_optimizer.step()
 
-            # LOSS DO ACTOR
+            # Cálculo da loss do ator
             actor_loss = 0.0
             for t in range(horizon):
-                # Usamos a predição do value net para guiar o ator
+                # Atualiza o ator para maximizar o valor predito
                 actor_loss += -value_net(latents_imag[t]).mean()
             actor_loss /= horizon
 
             actor_optimizer.zero_grad()
             actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=100)
             actor_optimizer.step()
 
             epoch_value_loss += value_loss.item()
@@ -204,100 +208,3 @@ def behavior_learning(
               f"Value Loss: {avg_value_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
 
     return actor, value_net, actor_loss_history, value_loss_history
-
-
-
-def select_action(actor, state):
-    """
-    Dado o estado (vetorial), retorna a ação contínua e seu log-prob.
-    """
-    state_t = torch.FloatTensor(state).unsqueeze(0)  # [1, state_dim]
-    dist, mean, std = actor(state_t)
-    # Usamos rsample para permitir backprop (reparametrização)
-    action_t = dist.rsample()  
-    log_prob = dist.log_prob(action_t).sum(dim=-1)
-    action = action_t.detach().cpu().numpy()[0]
-    return action, log_prob
-
-
-
-def main():
-    device = training_device()
-    env = gym.make('Pendulum-v1')
-    max_episode_steps = 300
-    obs_dim = env.observation_space.shape[0]   # geralmente 3 para Pendulum
-    action_dim = env.action_space.shape[0]       # 1 dimensão
-    latent_dim = obs_dim  # Aqui, tratamos o estado observado como latente
-
-    actor = ActionModel(latent_dim, action_dim)
-    value_net = ValueNet(latent_dim)
-
-    actor_optimizer = optim.Adam(actor.parameters(), lr=1e-5)
-    value_optimizer = optim.Adam(value_net.parameters(), lr=1e-5)
-    mse_loss = nn.MSELoss()
-    gamma = 0.99
-    num_episodes = 1000
-    repo = "behavior/model_continuous_1"
-    writer = SummaryWriter(repo)
-    print("Começando episodios")
-
-    for episode in range(num_episodes):
-        print(episode)
-        state, _ = env.reset()
-        done = False
-        total_reward = 0
-        step_count = 0
-
-        while not (done or (step_count==max_episode_steps)):
-            
-            step_count += 1
-
-            # Seleciona ação a partir do ator (distribuição contínua)
-            action, log_prob = select_action(actor, state)
-            next_state, reward, done, truncated, _ = env.step(action)
-            total_reward += reward
-
-            # Converte estados para tensores
-            state_t = torch.FloatTensor(state).unsqueeze(0)
-            next_state_t = torch.FloatTensor(next_state).unsqueeze(0)
-
-            # Calcula V(s) e V(s')
-            value_s = value_net(state_t)
-            with torch.no_grad():
-                value_next = value_net(next_state_t)
-                if done or truncated:
-                    value_next = torch.zeros_like(value_next)
-            
-            # TD target: r + γ V(s')
-            td_target = torch.FloatTensor([[reward]]) + gamma * value_next
-
-            # Vantagem: TD error
-            advantage = td_target - value_s
-
-            # Loss do ator: maximiza valor (minimiza -log_prob * advantage)
-            actor_loss = -log_prob * advantage.detach()
-
-            # Loss do crítico: MSE entre V(s) e TD target
-            value_loss = mse_loss(value_s, td_target)
-
-            # Otimização
-            actor_optimizer.zero_grad()
-            value_optimizer.zero_grad()
-            actor_loss.backward()
-            value_loss.backward()
-            actor_optimizer.step()
-            value_optimizer.step()
-
-            state = next_state
-
-        writer.add_scalar("reward", total_reward, episode)
-        writer.add_scalar("actor_loss", actor_loss.item(), episode)
-        writer.add_scalar("value_loss", value_loss.item(), episode)
-        print(f"Episode {episode+1}/{num_episodes} | Reward: {total_reward:.2f}")
-
-    print("Treinamento terminado")
-    env.close()
-    writer.close()
-
-if __name__ == "__main__":
-    main()
