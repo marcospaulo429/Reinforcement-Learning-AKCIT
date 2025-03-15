@@ -52,11 +52,11 @@ def main():
     hidden_dim = 256
     input_size = HEIGHT * WIDTH
     latent_dim = 256
-    batch_size = 1250
+    batch_size = 2500
     epochs_wm_behavior = 5
-    num_iterations = 3
+    num_iterations = 2000000
     update_step = 1
-    model_number = "dreamer3"
+    model_number = "dreamer_dgx_1"
     repositorio = f"dreamer/{model_number}"
     device = training_device()
     print("Usando device:", device)
@@ -113,7 +113,7 @@ def main():
         for it in range(update_step):
             print(f"\nUpdate Step {it+1}/{update_step} da iteração {iteration+1}/{num_iterations}")
             
-            if (iteration % 25 == 0) or (iteration < 5):
+            if (iteration % 25 == 0) or (iteration < 25):
                 # Treinamento do World Model
                 loss_train_history, loss_test_history, reward_train_history, reward_test_history = train_world_model(
                     10, world_model, train_loader, test_loader, device, hidden_dim, mse_loss, wm_optimizer)
