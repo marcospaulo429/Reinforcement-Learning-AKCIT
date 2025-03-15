@@ -8,9 +8,6 @@ mujoco==3.2.7
 numpy==2.0.2
 pillow==11.1.0
 protobuf==5.29.3
-PyYAML==6.0.2
-smmap==5.0.2
-sympy==1.13.1
 torch==2.6.0
 torchvision==0.21.0
 tqdm==4.67.1

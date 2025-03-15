@@ -1,50 +1,57 @@
 # Use CUDA 12.4 base image
-#FROM nvidia/cuda:12.4.0-devel-ubuntu22.04 # Especifica a imagem base
-FROM python:3.10-slim
+FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
+# Base multi-arch oficial do Python, compatível com ARM (Mac M1)
+#FROM python:3.10-slim
 
-# Set environment variables
+# Variáveis de ambiente básicas
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# Configura MuJoCo e define o backend headless para renderização via OSMesa
+ENV MJLIB_PATH=/tf/mujoco200_linux/bin/libmujoco200.so
+ENV MJKEY_PATH=/tf/mujoco200_linux/bin/mjkey.txt
+ENV MUJOCO_GL=osmesa
+ENV LD_LIBRARY_PATH=/tf/mujoco200_linux/bin/
+ENV PYOPENGL_PLATFORM=osmesa
+# Força o Mesa a usar OpenGL 3.3 (ajuda na compatibilidade)
+ENV MESA_GL_VERSION_OVERRIDE=3.3
+
+# Atualiza os repositórios e instala as dependências necessárias para Mesa/OSMesa
 RUN apt-get update && apt-get install -y \
-    git \
-    git-lfs \
-    python3.10 \
-    python3.10-dev \
-    python3-pip \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    libgl1-mesa-glx \
+    libosmesa6-dev \
+    libgl1-mesa-dri \
+    libglapi-mesa \
+    mesa-utils \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-ADD https://astral.sh/uv/install.sh /uv-installer.sh
-RUN sh /uv-installer.sh && rm /uv-installer.sh
-ENV PATH="/root/.local/bin/:$PATH"
-
-# Create and activate virtual environment using Python 3.10 
-RUN uv venv /opt/venv --python python3.10
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Upgrade pip e instale dependências básicas
-RUN uv pip install --upgrade pip --link-mode=copy && \
-    uv pip install wandb setuptools wheel --link-mode=copy
-
-# Set working directory
+# Cria o ambiente de trabalho
 WORKDIR /app
 
-# Copia todo o código do projeto
+# Cria um ambiente virtual Python
+RUN python -m venv /venv
+
+# Atualiza o PATH para usar o ambiente virtual
+ENV PATH="/venv/bin:$PATH"
+
+# Copia o arquivo de dependências (requirements.txt)
+COPY requirements.txt ./
+
+# Atualiza o pip, força a instalação do PyOpenGL na versão 3.1.0 (mais estável para headless) 
+# e instala as demais dependências
+RUN pip install --upgrade pip && \
+    pip install PyOpenGL==3.1.0 && \
+    pip install -r requirements.txt
+
+# Define o diretório de trabalho para a aplicação
+WORKDIR /dreamer
+
+# Copia o restante da aplicação
 COPY . .
 
-# Baixa as dependências necessárias conforme nosso arquivo de requirements.txt
-RUN uv pip install -r requirements.txt --link-mode=copy
-
-# Add build arguments (ajuste conforme sua necessidade)
-ARG GIT_COMMIT
+# Argumento de build para a chave do wandb (atenção: evite expor dados sensíveis)
 ARG WANDB_KEY
+ENV WANDB_API_KEY=wandbkey
 
-# Define variáveis de ambiente para o treinamento
-ENV GIT_COMMIT=$GIT_COMMIT
-ENV WANDB_API_KEY=$WANDB_KEY
-
-# Entry point: executa o arquivo main.py
-ENTRYPOINT ["python", "main.py"]
+# Comando para executar o main.py ao iniciar o container
+CMD ["python", "main.py"]
