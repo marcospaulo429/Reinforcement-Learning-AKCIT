@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from dm_control import suite
 from dm_control.suite.wrappers import pixels
@@ -52,14 +53,17 @@ def main():
     hidden_dim = 256
     input_size = HEIGHT * WIDTH
     latent_dim = 256
-    batch_size = 2500
     epochs_wm_behavior = 5
-    num_iterations = 2000000
     update_step = 1
-    model_number = "dreamer_dgx_1"
+    batch_size = int(os.getenv('BATCH_SIZE', 2500))
+    repository_path = os.getenv('MODEL_REPOSITORY_PATH', '/raid/aluno_marcospaulo')
+    num_iterations = int(os.getenv('NUM_ITERATIONS', 2000000))
+    model_number = os.getenv('MODEL_NAME', 'dreamer_dgx_run1')
     repositorio = f"dreamer/{model_number}"
+    tags = os.getenv('NAME_RUN', 'dgx_run_1')
+
     device = training_device()
-    print("Usando device:", device)
+    print(f"Usando device: {device}, {repository_path}, {num_iterations}, {model_number}, {batch_size}")
     
     env = suite.load(domain_name="cartpole", task_name="swingup")
     env = pixels.Wrapper(env, pixels_only=True,
@@ -101,9 +105,9 @@ def main():
     replay_buffer = collect_replay_buffer(env, 5, replay_buffer)
     rewards_history = []
     
-    for iteration in range(start_iteration, num_iterations):
+    for iteration in tqdm(range(start_iteration, num_iterations)):
         global_step += 1  
-        print(f"\n[Global Step {global_step}] Iniciando iteração {iteration+1}/{num_iterations}")
+        #print(f"\n[Global Step {global_step}] Iniciando iteração {iteration+1}/{num_iterations}")
         
         # Amostra sequências do replay_buffer
         data_sequence = sample_data_sequences(replay_buffer, num_sequences=50, sequence_length=50)
@@ -111,7 +115,7 @@ def main():
             data_sequence, batch_size=batch_size, HEIGHT=HEIGHT, WIDTH=WIDTH)
         
         for it in range(update_step):
-            print(f"\nUpdate Step {it+1}/{update_step} da iteração {iteration+1}/{num_iterations}")
+            #print(f"\nUpdate Step {it+1}/{update_step} da iteração {iteration+1}/{num_iterations}")
             
             if (iteration % 25 == 0) or (iteration < 25):
                 # Treinamento do World Model
@@ -152,7 +156,7 @@ def main():
                 })
         
         # INTERAÇÃO COM O AMBIENTE
-        print(f"Coletando interação {iteration+1} no ambiente")
+        #print(f"Coletando interação {iteration+1} no ambiente")
         time_step = env.reset()
         done = False
         obs_atual = converter_cinza(time_step.observation['pixels'])
@@ -236,11 +240,11 @@ def main():
             torch.save(value_net.state_dict(), os.path.join(repositorio, "value_net_weights.pth"))
             print("Model weights saved")"""
     
-    print("\nTreinamento finalizado para essa fase!")
-    """torch.save(world_model.state_dict(), os.path.join(repositorio, "world_model_weights.pth"))
-    torch.save(actor.state_dict(), os.path.join(repositorio, "actor_weights.pth"))
-    torch.save(value_net.state_dict(), os.path.join(repositorio, "value_net_weights.pth"))
-    print("Model weights saved")"""
+    #print("\nTreinamento finalizado para essa fase!")
+    torch.save(world_model.state_dict(), os.path.join(repository_path, "world_model_weights.pth"))
+    torch.save(actor.state_dict(), os.path.join(repository_path, "actor_weights.pth"))
+    torch.save(value_net.state_dict(), os.path.join(repository_path, "value_net_weights.pth"))
+    #print("Model weights saved")
     wandb.finish()
 
 if __name__ == "__main__":
