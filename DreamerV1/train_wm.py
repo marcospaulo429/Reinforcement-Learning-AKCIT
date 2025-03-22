@@ -241,7 +241,7 @@ def train_world_model(num_epochs, world_model, train_loader, test_loader, device
         avg_test_loss = test_loss / test_batches
         loss_test_history.append(avg_test_loss)
         reward_test_history.append(reward_loss_epoch)
-        print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {avg_train_loss:.4f} | Test Loss: {avg_test_loss:.4f}")
+        #print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {avg_train_loss:.4f} | Test Loss: {avg_test_loss:.4f}")
     
     return loss_train_history, loss_test_history, reward_train_history, reward_test_history
 

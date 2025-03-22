@@ -118,7 +118,7 @@ def imagine_rollout(world_model, actor, latent, hidden, horizon=5, gamma=0.99):
     return latents_imag, rewards_imag
 
 
-def behavior_learning( #TODO: ver se funcoes de valor e modelo de actor-critic esta certo
+def behavior_learning( 
     world_model, actor, value_net,
     latent_loader,
     device,
@@ -133,6 +133,8 @@ def behavior_learning( #TODO: ver se funcoes de valor e modelo de actor-critic e
     """
     Treina o ator e o value net utilizando rollouts imaginados a partir dos latentes.
     """
+    world_model.train()
+
     actor_loss_history = []
     value_loss_history = []
 
@@ -156,6 +158,7 @@ def behavior_learning( #TODO: ver se funcoes de valor e modelo de actor-critic e
 
             # Cálculo do lambda-return para o value net
             target_values = torch.zeros(horizon, batch_size, 1, device=device)
+            
             with torch.no_grad():
                 # Bootstrap: valor do último latente
                 v_next = value_net(latents_imag[-1])
@@ -165,6 +168,8 @@ def behavior_learning( #TODO: ver se funcoes de valor e modelo de actor-critic e
                     v_next = value_net(latents_imag[t + 1])
                     target_values[t] = rewards_imag[t] + gamma * ((1 - lam) * v_next + lam * target_values[t + 1])
             
+            actor.train()
+            value_net.train()
             # Cálculo da loss do value net
             value_loss = 0.0
             for t in range(horizon):
@@ -198,7 +203,7 @@ def behavior_learning( #TODO: ver se funcoes de valor e modelo de actor-critic e
         value_loss_history.append(avg_value_loss)
         actor_loss_history.append(avg_actor_loss)
 
-        print(f"[Behavior] Epoch {b_ep+1}/{epochs_behavior} | "
-              f"Value Loss: {avg_value_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
+        #print(f"[Behavior] Epoch {b_ep+1}/{epochs_behavior} | "
+        #      f"Value Loss: {avg_value_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
 
     return actor, value_net, actor_loss_history, value_loss_history
