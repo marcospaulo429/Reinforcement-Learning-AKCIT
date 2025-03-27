@@ -1,0 +1,35 @@
+services:
+  dreamer_dgx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aluno_marcospaulo-dreamer_bh_v1
+    container_name: aluno_marcospaulo-dreamer_bh_v1_1
+    # platform: linux/amd64 # Já vi gente fazendo assim, mas não sei se é necessário
+    # runtime: nvidia # Já vi gente fazendo assim, mas não sei se é necessário
+    environment:
+      - MJLIB_PATH=/tf/mujoco200_linux/bin/libmujoco200.so
+      - MJKEY_PATH=/tf/mujoco200_linux/bin/mjkey.txt
+      - MUJOCO_GL=osmesa
+      - LD_LIBRARY_PATH=/tf/mujoco200_linux/bin/
+      - PYOPENGL_PLATFORM=osmesa
+      - MESA_GL_VERSION_OVERRIDE=3.3
+      - MODEL_REPOSITORY_PATH=/raid/aluno_marcospaulo
+      #- NUM_ITERATIONS=1000000
+      #- MODEL_NAME=dreamer_bl_dgx_1run
+      #- BATCH_SIZE=2500
+      - WANDB_API_KEY=577c62968375fc8355c28c662fdac7e867b5edc1 # Substitua pela sua chave WANDB real
+    #ports:
+    #  - "8000:8000" # Caso seu app tenha uma interface/api, escolha uma porta para expor
+    volumes:
+      - /raid/aluno_marcospaulo/dreamer:/raid/aluno_marcospaulo
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"       # Limite de CPUs
+          memory: 18G       # Limite de GB de memória
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "1" ]  # Substitua pelo ID da GPU desejada
+              capabilities: [ gpu ]

@@ -103,19 +103,6 @@ def get_data_loaders_from_replay_buffer(replay_buffer, batch_size=64, test_split
     Cada exemplo contém: obs, action, reward, next_obs.
     As imagens (obs e next_obs) estão em formato (HEIGHT, WIDTH) e são flattenadas para (HEIGHT*WIDTH).
     Garante que o array de ação tenha shape (N, action_dim).
-    
-    A função recebe como entrada:
-
-    - **replay_buffer:** Estrutura contendo episódios com passos (steps), onde cada step possui as chaves "obs", "action", "reward" e "next_obs".
-    - **batch_size (padrão 64):** Tamanho dos batches para os DataLoaders.
-    - **test_split (padrão 0.1):** Proporção dos dados a serem usados para o conjunto de teste.
-    - **HEIGHT e WIDTH (padrão 84):** Dimensões das imagens de observação, que serão achatadas para vetores de tamanho HEIGHT×WIDTH.
-    - **action_dim (padrão 1):** Dimensão que a ação deve ter.
-
-    O output da função é:
-
-    - **train_loader:** Um DataLoader do PyTorch para o conjunto de treinamento.
-    - **test_loader:** Um DataLoader do PyTorch para o conjunto de teste.
     """
     obs_list = []
     action_list = []
