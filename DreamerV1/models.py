@@ -177,7 +177,7 @@ class ConvEncoder(Module):
 
     def forward(self, obs):
         # obs é um dicionário contendo 'image' com formato (batch, C, H, W).
-        x = obs['image']
+        x = obs
         # Aplicação de camadas convolucionais com stride 2.
         x = self.get('h1', nn.Conv2d, 3, 1 * self._depth, kernel_size=4, stride=2)(x)
         x = self._act(x)

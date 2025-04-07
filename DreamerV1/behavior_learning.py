@@ -127,7 +127,7 @@ def behavior_learning(
         value_loss.backward(retain_graph=True)
         value_optimizer.step()  
         
-        mean_actor_reward = torch.mean(torch.sum(rewards_tensor))
+        mean_actor_reward = torch.mean(rewards_tensor)
         print(actor_loss,value_loss,mean_actor_reward)
         wandb.log({"Mean_Reward": mean_actor_reward, "ValueLoss": value_loss, "ActorLoss": actor_loss})
     
@@ -141,29 +141,29 @@ def main():
                          render_kwargs={'height': 84, 'width': 84, 'camera_id': 0})
     
     # Define dimensões dos modelos
-    batch_size = 2000
+    batch_size = 1500
     obs_shape = (batch_size, 84, 84)
     action_dim = env.action_spec().shape[0]
-    hidden_dim = 300
-    latent_dim = 300
+    hidden_dim = 200
+    latent_dim = 200
     
     # Instancia os modelos e move para o device
     world_model = DreamerWorldModel(obs_shape, latent_dim, action_dim, hidden_dim).to(device)
-    actor = ActionDecoder(action_dim, 3, 300, device=device)
+    actor = ActionDecoder(action_dim, 3, 200, device=device)
     value_net = ValueNet(latent_dim).to(device)
     
     dummy_input = torch.randn(1, latent_dim, device=device)
     _ = actor(dummy_input)  # Executa forward para criar os parâmetros
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=1e-4)
-    value_optimizer = torch.optim.Adam(value_net.parameters(), lr=1e-4)
+    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=8e-5)
+    value_optimizer = torch.optim.Adam(value_net.parameters(), lr=8e-5)
     
-    wandb.init(project="behavior", name="m1-bh-7")
+    wandb.init(project="behavior", name="m1-bh-8")
     
-    data_sequence = collect_replay_buffer(env, 1, ReplayBuffer())
+    data_sequence = collect_replay_buffer(env, 12, ReplayBuffer())
     
-    for iteration in range(100000):
+    for iteration in range(1000):
         print(f"\n================ Iteração: {iteration} =================")
-        horizon = 0
+        horizon = 1
         actor, value_net = behavior_learning(
             data_sequence,
             world_model,
