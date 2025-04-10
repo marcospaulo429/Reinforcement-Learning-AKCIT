@@ -1,4 +1,5 @@
 import torch
+import time
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 from dm_control import suite
@@ -15,11 +16,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
 import wandb
-
-def reparameterize(z_mean, z_log_var):
-    std = torch.exp(0.5 * z_log_var)
-    epsilon = torch.randn_like(std)
-    return z_mean + epsilon * std
+import os
 
 
 def reparameterize(z_mean, z_log_var):
@@ -79,24 +76,6 @@ class VAE(nn.Module):
         recon = self.decoder(z)
         return recon, z_mean, z_log_var
 
-"""# Código de teste
-# Código de teste 
-if __name__ == "__main__":
-    latent_dim = 512  # Aumentei a dimensionalidade latente para 64 para representar melhor os dados
-    batch_size = 16
-    in_channels = 1  # Agora o modelo espera imagens RGB
-    height, width = 84, 84
-
-    # Cria um tensor dummy com shape (batch, channels, 84,84)
-    dummy_input = torch.randn(batch_size, in_channels, height, width)
-    
-    model = VAE(latent_dim, in_channels)
-    recon, z_mean, z_log_var = model(dummy_input)
-    
-    print("Input shape:           ", dummy_input.shape)    # (16, 3, 84, 84)
-    print("Reconstruction shape:  ", recon.shape)           # (16, 3, 84, 84)
-    print("z_mean shape:          ", z_mean.shape)          # (16, 64)
-    print("z_log_var shape:       ", z_log_var.shape)       # (16, 64)"""
 
 def vae_loss_fn(encoder_inputs, vae_outputs, z_mean, z_log_var):
     
@@ -105,13 +84,13 @@ def vae_loss_fn(encoder_inputs, vae_outputs, z_mean, z_log_var):
     
     # Cálculo da divergência KL
     # KL = -0.5 * mean(1 + log_var - z_mean^2 - exp(log_var))
-    #kl_loss = -0.2 * torch.mean(1 + z_log_var - z_mean.pow(2) - torch.exp(z_log_var))
+    kl_loss = -0.2 * torch.mean(1 + z_log_var - z_mean.pow(2) - torch.exp(z_log_var))
     
-    return reconstruction_loss# + kl_loss
+    return reconstruction_loss + kl_loss
 
 device = training_device()
-data_len = 1
-batch_size = 1000
+data_len = 5 #TODO
+batch_size = 5000#TODO
 
 env = suite.load(domain_name="cartpole", task_name="swingup")
 env = pixels.Wrapper(env, pixels_only=True,
@@ -145,15 +124,14 @@ test_dataset = TensorDataset(test_obs, test_obs)
 # Criar DataLoader para treino e teste
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-def train_autoencoder_dreamer(num_epochs, latent_dim, in_channels, height, width, learning_rate, hidden_units, name_wandb):
-
+        
+def train_autoencoder_dreamer(num_epochs, latent_dim, in_channels, height, width, learning_rate, hidden_units, name_wandb, checkpoint_dir):
     # Inicializa o WandB com as configurações do experimento
     wandb.init(project="autoencoder_dreamer", name= name_wandb,config={
         "epochs": num_epochs,
         "latent_dim": latent_dim,
         "in_channels": in_channels,
-        "height": height,
+        "height": height, 
         "width": width,
         "learning_rate": learning_rate,
         "hidden_units": hidden_units
@@ -191,52 +169,84 @@ def train_autoencoder_dreamer(num_epochs, latent_dim, in_channels, height, width
                 recon, z_mean, z_log_var = model(inputs)
                 loss = vae_loss_fn(inputs, recon, z_mean, z_log_var)
                 test_loss += loss.item()
-            avg_test_loss = test_loss / (batch_idx + 1)
+                
+            avg_test_loss = test_loss / len(test_loader)  # Calcula a média da perda de teste
         
-        # Seleciona uma imagem real e sua reconstrução para plotar
+        # Seleciona imagens reais e suas reconstruções para plotar
         with torch.no_grad():
-            for inputs, targets in test_loader:
-                inputs = inputs.to(device)
-                recon, _, _ = model(inputs)
-                # Seleciona a primeira imagem do batch
-                original_img = inputs[0].cpu().squeeze()
-                recon_img = recon[0].cpu().squeeze()
-                break
+            inputs_batch, targets_batch = next(iter(test_loader))
+            inputs_batch = inputs_batch.to(device)
+            recon_batch, _, _ = model(inputs_batch)
+            
+            # Cria uma lista para armazenar as imagens logadas no WandB
+            images = []
+            for i in range(20):  # Seleciona 20 imagens do batch
+                original_img = inputs_batch[i].cpu().squeeze()
+                recon_img = recon_batch[i].cpu().squeeze()
 
-        # Cria uma figura com duas subplots (imagem original e reconstruída)
-        fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-        axs[0].imshow(original_img, cmap='gray')
-        axs[0].set_title("Imagem Original")
-        axs[0].axis("off")
+                # Cria uma figura com duas subplots (imagem original e reconstruída)
+                fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+                axs[0].imshow(original_img, cmap='gray')
+                axs[0].set_title("Imagem Original")
+                axs[0].axis("off")
 
-        axs[1].imshow(recon_img, cmap='gray')
-        axs[1].set_title("Reconstrução")
-        axs[1].axis("off")
+                axs[1].imshow(recon_img, cmap='gray')
+                axs[1].set_title("Reconstrução")
+                axs[1].axis("off")
 
-        plt.suptitle(f"Época {epoch+1}")
+                # Adiciona a imagem ao log do WandB
+                images.append(wandb.Image(fig))
+
+                plt.close(fig)
         
-        # Loga a figura e as métricas no WandB
+        # Loga as 20 imagens e as métricas no WandB
         wandb.log({
-            "epoch": epoch+1,
+            "epoch": epoch,
             "train_loss": avg_loss,
             "test_loss": avg_test_loss,
-            "recon_image": wandb.Image(fig, caption=f"Época {epoch+1}: Original vs Reconstruída")
+            "recon_images": images  # Loga as 20 imagens de teste
         })
-        plt.close(fig)
+            
+        print(f"Fim da época {epoch+1}, Loss média de treino: {avg_loss}, Loss de teste: {avg_test_loss}")
         
-    del model, optimizer, inputs, targets, loss, recon_img, original_img, recon, z_log_var, z_mean
+        best_test_loss = 16
+        if (epoch % 30 == 0) and (avg_loss < best_test_loss):  
+            best_test_loss = avg_loss
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{name_wandb}_epoch{epoch}.pt")
+            torch.save({#TODO
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+            'test_loss': avg_test_loss 
+            }, checkpoint_path)
+            
+        del images, inputs_batch, targets_batch, original_img, recon_img, avg_loss, avg_test_loss, inputs, targets, recon, z_mean, z_log_var
+        
+    wandb.finish()
+    
+    del model, optimizer
+
         
 
 # Lista de hiperparâmetros que você quer testar
-latent_dim_list = [128, 256, 512, 1024] 
-learning_rate_list = [1e-4, 1e-3, 1e-5, 5e-5, 5e-4]  
-hidden_units_list = [128, 256, 512, 1024]  
+latent_dim_list = [128] 
+learning_rate_list = [1e-3, 1e-4] #TODO
+hidden_units_list = [128]  
 
 # Cria todas as combinações possíveis dos valores dos hiperparâmetros
 param_combinations = list(itertools.product(latent_dim_list, learning_rate_list, hidden_units_list))
 
 for latent_dim, learning_rate, hidden_units in param_combinations:
     print(f"Treinando com: latent_dim={latent_dim}, learning_rate={learning_rate}, hidden_units={hidden_units}")
-    name_wandb = f"m1-lat{latent_dim}_lr{learning_rate}_h{hidden_units}"
+    name_wandb = f"dgx_treino3-lat{latent_dim}_lr{learning_rate}_h{hidden_units}" #TODO
+    
+    if torch.cuda.is_available(): #TODO
+        torch.cuda.empty_cache()
+        
     # Chame a função de treinamento com os parâmetros da combinação
-    train_autoencoder_dreamer(num_epochs=200, latent_dim=latent_dim, in_channels=1, height=84, width=84, learning_rate = learning_rate, hidden_units = hidden_units, name_wandb=name_wandb)
+    train_autoencoder_dreamer(num_epochs=600, latent_dim=latent_dim, in_channels=1, 
+                              height=84, width=84, learning_rate = learning_rate, hidden_units = hidden_units, name_wandb=name_wandb, #TODO
+                              checkpoint_dir=f"/aluno_marcospaulo/{name_wandb}")#TODO
+    time.sleep(15)
