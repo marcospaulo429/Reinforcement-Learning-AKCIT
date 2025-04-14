@@ -112,8 +112,6 @@ else:
     
 
 encoder = model.encoder
-print(next(model.parameters()).device)
-
 
 env_train = suite.load(domain_name="cartpole", task_name="swingup")
 env_train = pixels.Wrapper(env_train, pixels_only=True,
@@ -124,13 +122,13 @@ env_test = pixels.Wrapper(env_train, pixels_only=True,
                     render_kwargs={'height': 84, 'width': 84, 'camera_id': 0})
 
 
-class Critic(nn.Module):
+class Critic(nn.Module): 
     def __init__(self, in_features, hidden_dimensions, out_features, dropout):
         super().__init__()
 
         self.layer1 = nn.Linear(in_features, hidden_dimensions)
         self.layer2 = nn.Linear(hidden_dimensions, hidden_dimensions)
-        self.layer3 = nn.Linear(hidden_dimensions, out_features)
+        self.layer3 = nn.Sigmoide(hidden_dimensions, out_features)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -185,13 +183,14 @@ def create_agent(HIDDEN_DIMENSIONS, DROPOUT, INPUT_FEATURES, ACTOR_OUTPUT_FEATUR
     return actor, critic
 
 def calculate_returns(rewards, discount_factor):
+    global device
     returns = []
     cumulative_reward = 0
     for r in reversed(rewards):
         cumulative_reward = r + cumulative_reward * discount_factor
         returns.insert(0, cumulative_reward)
 
-    returns = torch.tensor(returns)
+    returns = torch.tensor(returns, device=device)  
     # normalize the return
     returns = (returns - returns.mean()) / returns.std()
 
@@ -417,7 +416,7 @@ def run_ppo():
     EPSILON = 0.2
     ENTROPY_COEFFICIENT = 0.01
 
-    HIDDEN_DIMENSIONS = 300
+    HIDDEN_DIMENSIONS = 32
     DROPOUT = 0.2
     LEARNING_RATE_ACTOR = 0.001
     LEARNING_RATE_CRITIC = 0.001
@@ -426,6 +425,9 @@ def run_ppo():
     test_rewards = []
     policy_losses = []
     value_losses = []
+    name_wandb = "ppo_dreamer2"
+
+    wandb.init(project="ppo_dreamer", name= name_wandb)
 
     actor, critic = create_agent(HIDDEN_DIMENSIONS, DROPOUT, INPUT_FEATURES, ACTOR_OUTPUT_FEATURES)
     optimizer_actor = optim.Adam(actor.parameters(), lr=LEARNING_RATE_ACTOR)
@@ -453,23 +455,22 @@ def run_ppo():
                 ENTROPY_COEFFICIENT)
         test_reward = evaluate(env_test, actor, encoder, device)
 
+        wandb.log({
+            "episode": episode,
+            "policy_loss": policy_loss,
+            "value_loss": value_loss,
+            "train_rewards": train_reward,
+            "test_rewards": test_reward  # Loga as 20 imagens de teste
+        })
+
         policy_losses.append(policy_loss)
         value_losses.append(value_loss)
         train_rewards.append(train_reward)
         test_rewards.append(test_reward)
 
-        mean_train_rewards = np.mean(train_rewards[-N_TRIALS:])
-        mean_test_rewards = np.mean(test_rewards[-N_TRIALS:])
-        mean_abs_policy_loss = np.mean(policy_losses[-N_TRIALS:])
-        mean_abs_value_loss = np.mean(value_losses[-N_TRIALS:])
-
         if episode % PRINT_INTERVAL == 0:
             print(f'Episode: {episode:3d} | Training Reward: {train_reward:.1f} | '
                   f'Testing Reward: {test_reward:.1f} | '
-                  f'Mean Train Rewards: {mean_train_rewards:.1f} | '
-                  f'Mean Test Rewards: {mean_test_rewards:.1f} | '
-                  f'Mean  Policy Loss: {mean_abs_policy_loss:.2f} | '
-                  f'Mean  Value Loss: {mean_abs_value_loss:.2f} | '
                   f' Policy Loss: {policy_loss:.2f} | '
                   f'Value Loss: {value_loss:.2f} | ')
 
