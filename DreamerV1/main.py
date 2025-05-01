@@ -9,13 +9,13 @@ from tqdm import tqdm
 from dm_control import suite
 from dm_control.suite.wrappers import pixels
 
-from auxiliares import training_device, converter_cinza
-from replay_buffer import ReplayBuffer
-from general_algo import collect_replay_buffer, sample_data_sequences
-from train_wm import DreamerWorldModel, get_data_loaders_from_replay_buffer, train_world_model
-from behavior_learning import behavior_learning, extract_latent_sequences, create_latent_dataset
+from DreamerV1.utils.auxiliares import training_device, converter_cinza
+from DreamerV1.utils.replay_buffer import ReplayBuffer
+from DreamerV1.algorithms.general_algo import collect_replay_buffer, sample_data_sequences
+from DreamerV1.algorithms.train_wm import DreamerWorldModel, get_data_loaders_from_replay_buffer, train_world_model
+from DreamerV1.algorithms.behavior_learning import behavior_learning, extract_latent_sequences, create_latent_dataset
 from actor_critic import ValueNet
-from models import ActionDecoder
+from DreamerV1.models.models import ActionDecoder
 
 import wandb
 

@@ -1,7 +1,7 @@
 import random
 import numpy as np
-from auxiliares import converter_cinza
-from replay_buffer import ReplayBuffer
+from DreamerV1.utils.auxiliares import converter_cinza
+from DreamerV1.utils.replay_buffer import ReplayBuffer
 
 def collect_replay_buffer(env,S,replay_buffer): 
     for i in range(S):
