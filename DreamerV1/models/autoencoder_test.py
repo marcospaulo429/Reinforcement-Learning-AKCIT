@@ -3,10 +3,10 @@ import time
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 from dm_control import suite
-from replay_buffer import ReplayBuffer
-from general_algo import collect_replay_buffer
+from DreamerV1.utils.replay_buffer import ReplayBuffer
+from DreamerV1.algorithms.general_algo import collect_replay_buffer
 from dm_control.suite.wrappers import pixels
-from auxiliares import training_device
+from DreamerV1.utils.auxiliares import training_device
 import torch
 import numpy as np
 from sklearn.model_selection import train_test_split

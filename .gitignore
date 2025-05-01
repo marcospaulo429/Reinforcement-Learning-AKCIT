@@ -1,5 +1,10 @@
-DreamerV1/testes
-DreamerV1/treinos
 DreamerV1/autoencoder
-DreamerV1/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
-DreamerV1/ppo
+ppo/models/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
+DreamerV1/models/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
+ppo/notebooks
+DreamerV1/notebooks
+ppo/wandb
+Papers
+Latent Reasoning
+ppo/models/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
+workload-daemon

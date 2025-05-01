@@ -2,14 +2,14 @@ import torch
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 from dm_control import suite
-from replay_buffer import ReplayBuffer
-from general_algo import collect_replay_buffer
+from DreamerV1.utils.replay_buffer import ReplayBuffer
+from DreamerV1.algorithms.general_algo import collect_replay_buffer
 from dm_control.suite.wrappers import pixels
-from train_wm import DreamerWorldModel
+from DreamerV1.algorithms.train_wm import DreamerWorldModel
 from actor_critic import ValueNet
-from models import ActionDecoder
+from DreamerV1.models.models import ActionDecoder
 import wandb
-from auxiliares import training_device
+from DreamerV1.utils.auxiliares import training_device
 
 torch.autograd.set_detect_anomaly(True)
 

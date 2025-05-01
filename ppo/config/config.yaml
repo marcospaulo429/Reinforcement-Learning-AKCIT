@@ -1,0 +1,28 @@
+# config.yaml
+training:
+  use_wandb: true
+  use_checkpoint: false
+  max_episodes: 300
+  discount_factor: 0.99
+  reward_threshold: 150
+  print_interval: 10
+  ppo_steps: 10
+  n_trials: 100
+  epsilon: 0.2
+  entropy_coefficient: 0.01
+  quantity_random_search: 5
+  name_experiment: "ppo_experiment_m1"
+  save_model: false
+
+model:
+  latent_dim: 128
+  in_channels: 1
+  hidden_units: 128
+  input_features: 128 
+  num_layers: 2
+  hidden_dimensions: 150
+  dropout: 0.2
+
+optimizer:
+  learning_rate_actor: 1e-3
+  learning_rate_critic: 1e-3
