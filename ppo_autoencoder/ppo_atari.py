@@ -74,6 +74,8 @@ class Args:
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
+    recon_coef: float = 1
+    """coefficient of the reconstruction loss"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
@@ -147,7 +149,7 @@ class Encoder(nn.Module):
         self.encoder_fc_logvar = layer_init(nn.Linear(32 * 7 * 7, latent_dim))
 
     def forward(self, x):
-        x = self.encoder_cnn(x)
+        x = self.encoder_cnn(x / 255.0)
         mu = self.encoder_fc_mu(x)
         logvar = self.encoder_fc_logvar(x)
         return mu, logvar
@@ -170,7 +172,7 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2),
             nn.ReLU(),
             nn.ConvTranspose2d(16, 4, kernel_size=8, stride=4),
-            nn.Sigmoid(),
+            nn.Sigmoid()
         )
 
     def forward(self, z):
@@ -250,7 +252,8 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    #device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() and args.cuda else "cpu")
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
@@ -263,6 +266,9 @@ if __name__ == "__main__":
 
     encoder = Encoder(args.latent_dim).to(device)
     encoder_optimizer = optim.Adam(encoder.parameters(), lr=args.learning_rate, eps=1e-4)    
+
+    decoder = Decoder(args.latent_dim).to(device)   
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-4)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -291,6 +297,7 @@ if __name__ == "__main__":
             obs[step] = next_obs
             dones[step] = next_done
 
+
             # ALGO LOGIC: action logic
             with torch.no_grad():
                 mu, logvar = encoder.forward(next_obs)
@@ -303,7 +310,7 @@ if __name__ == "__main__":
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
 
             if "final_info" in infos:
@@ -384,8 +391,13 @@ if __name__ == "__main__":
                 else:
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
+                #Decoder loss
+                recon_images = decoder.forward(next_obs_latent)
+                recon_loss = vae_loss(recon_images, b_obs[mb_inds], mu, logvar)
+                recon_loss = recon_loss.mean()                    
+
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef + recon_loss * args.recon_coef
 
                 optimizer.zero_grad()
                 encoder_optimizer.zero_grad()
