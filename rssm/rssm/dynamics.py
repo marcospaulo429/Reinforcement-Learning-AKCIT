@@ -68,7 +68,10 @@ class DynamicsModel(nn.Module):
             prior_mean, prior_logvar = torch.chunk(prior_params, 2, dim=-1)
 
             ### Sample from the prior distribution ###
-            prior_dist = torch.distributions.Normal(prior_mean, torch.exp(F.softplus(prior_logvar)))
+            std = torch.exp(torch.clamp(F.softplus(prior_logvar), min=-10, max=10))
+            prior_mean = torch.nan_to_num(prior_mean, nan=0.0, posinf=1e6, neginf=-1e6)
+            prior_dist = torch.distributions.Normal(prior_mean, std)
+
             prior_state_t = prior_dist.rsample()
 
             ### Determine the posterior distribution ###
@@ -82,7 +85,10 @@ class DynamicsModel(nn.Module):
                 posterior_mean, posterior_logvar = torch.chunk(posterior_params, 2, dim=-1)
 
             ### Sample from the posterior distribution ###
-            posterior_dist = torch.distributions.Normal(posterior_mean, torch.exp(F.softplus(posterior_logvar)))
+            posterior_mean = torch.nan_to_num(posterior_mean, nan=0.0, posinf=1e6, neginf=-1e6)
+            posterior_std = torch.exp(torch.clamp(F.softplus(posterior_logvar), min=-10, max=10))
+            posterior_dist = torch.distributions.Normal(posterior_mean, posterior_std)
+
             posterior_state_t = posterior_dist.rsample()
 
             ### Store results in lists (instead of in-place modification) ###

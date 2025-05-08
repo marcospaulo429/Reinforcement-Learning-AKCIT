@@ -44,6 +44,7 @@ class Trainer:
         self.agent.buffer.save(path)
 
     def train_batch(self, batch_size: int, seq_len: int, iteration: int, save_images: bool = False):
+        
         obs, actions, rewards, dones = self.agent.buffer.sample(batch_size, seq_len)
 
         actions = torch.tensor(actions).long().to(self.device)
@@ -66,11 +67,28 @@ class Trainer:
         decoded_obs = self.rssm.decoder(hiddens_reshaped, posterior_states_reshaped)
         decoded_obs = decoded_obs.reshape(batch_size, seq_len, *obs.shape[-3:])
 
+        # Substitua este trecho no método train_batch:
+
         reward_params = self.rssm.reward_model(hiddens, posterior_states)
         mean, logvar = torch.chunk(reward_params, 2, dim=-1)
+
         logvar = F.softplus(logvar)
-        reward_dist = Normal(mean, torch.exp(logvar))
+        logvar = torch.clamp(logvar, min=-10, max=10)
+        std = torch.exp(logvar)
+        std = torch.clamp(std, min=1e-3)
+
+        # Verificação de validade numérica
+        if torch.isnan(mean).any() or torch.isinf(mean).any():
+            logger.warning("NaN or Inf detected in reward mean at iteration %d", iteration)
+            mean = torch.nan_to_num(mean, nan=0.0, posinf=1.0, neginf=-1.0)
+
+        if torch.isnan(std).any() or torch.isinf(std).any():
+            logger.warning("NaN or Inf detected in reward std at iteration %d", iteration)
+            std = torch.nan_to_num(std, nan=1.0, posinf=1.0, neginf=1.0)
+
+        reward_dist = Normal(mean, std)
         predicted_rewards = reward_dist.rsample()
+
 
         if save_images:
             batch_idx = np.random.randint(0, batch_size)
@@ -84,7 +102,7 @@ class Trainer:
             plt.close(fig)
 
         reconstruction_loss = self._reconstruction_loss(decoded_obs, obs)
-        kl_loss = self._kl_loss(prior_means, F.softplus(prior_logvars), posterior_means, F.softplus(posterior_logvars))
+        kl_loss = self._kl_loss(prior_means, prior_logvars, posterior_means, posterior_logvars)
         reward_loss = self._reward_loss(rewards, predicted_rewards)
 
         loss = reconstruction_loss + kl_loss + reward_loss
@@ -172,10 +190,15 @@ class Trainer:
         return F.mse_loss(decoded_obs, obs)
 
     def _kl_loss(self, prior_means, prior_logvars, posterior_means, posterior_logvars):
-        prior_dist = Normal(prior_means, torch.exp(prior_logvars))
-        posterior_dist = Normal(posterior_means, torch.exp(posterior_logvars))
+        prior_std = torch.clamp(F.softplus(prior_logvars), min=1e-3)
+        posterior_std = torch.clamp(F.softplus(posterior_logvars), min=1e-3)
 
-        return kl_divergence(posterior_dist, prior_dist).mean()
+        prior_dist = Normal(prior_means, prior_std)
+        posterior_dist = Normal(posterior_means, posterior_std)
+
+        kl_loss = torch.distributions.kl_divergence(posterior_dist, prior_dist).mean()
+        return kl_loss
+
 
     def _reward_loss(self, rewards, predicted_rewards):
         return F.mse_loss(predicted_rewards, rewards)
@@ -201,6 +224,7 @@ if __name__ == "__main__":
                 state_dim=state_dim,
                 action_dim=5,
                 embedding_dim=embedding_dim)
+                
 
     optimizer = torch.optim.Adam(rssm.parameters(), lr=1e-3)
     agent = Agent(env, rssm)
