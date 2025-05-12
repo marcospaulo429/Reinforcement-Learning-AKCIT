@@ -1,7 +1,7 @@
 # Use CUDA 12.4 base image
-#FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
 # Base multi-arch oficial do Python, compatível com ARM (Mac M1)
-FROM python:3.10-slim
+#FROM python:3.10-slim
 
 # Instala dependências do sistema
 RUN apt-get update && apt-get install -y \
