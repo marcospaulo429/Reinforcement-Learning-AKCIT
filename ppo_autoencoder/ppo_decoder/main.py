@@ -467,7 +467,5 @@ if __name__ == "__main__":
                 writer.add_images("reconstructions/reconstructed", recon_rgb, global_step)
 
 
-
-
         envs.close()
         writer.close()
