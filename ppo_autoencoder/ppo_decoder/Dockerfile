@@ -31,4 +31,4 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Define o comando padrão
-CMD ["python", "main.py"]
+CMD ["python3", "main.py"]
