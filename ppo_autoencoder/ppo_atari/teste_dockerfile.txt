@@ -1,0 +1,38 @@
+# Base image com Python 3.10, compatível com os pacotes
+#FROM python:3.10-slim
+FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
+
+# Evita prompts interativos durante instalação
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instala dependências do sistema e Python 3.10
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    wget \
+    git \
+    curl \
+    ffmpeg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    python3.10 \
+    python3.10-venv \
+    python3.10-dev \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Atualiza pip e configura Python 3.10 como padrão
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
+    python -m pip install --upgrade pip
+
+# Diretório de trabalho
+WORKDIR /app/ppo_atari
+
+# Copia os arquivos do projeto
+COPY requirements.txt .
+COPY . .
+
+# Instala pacotes Python
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Comando padrão
+CMD ["python3", "main.py"]
