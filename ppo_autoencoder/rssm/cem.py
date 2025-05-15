@@ -15,7 +15,7 @@ observation, _ = env.reset()
 
 # Inicializar distribuição das ações (contínuas entre -1 e 1)
 mean = torch.zeros(H)
-std = torch.ones(H) * 2.0  # Variância maior para explorar mais
+std = torch.ones(H)
 best_total_reward = -float('inf')
 best_actions = None
 

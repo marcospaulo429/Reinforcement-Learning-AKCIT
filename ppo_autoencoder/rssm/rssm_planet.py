@@ -176,7 +176,89 @@ def reparameterize(mu, logvar):
     eps = torch.randn_like(std)
     return mu + eps * std
 
+def planner_discrete(env, H, J, batch, initial_obs, rssm): #TODO: colocar batch
+    # Inicializar distribuição das ações (contínuas entre -1 e 1)
+    mean = torch.zeros(H)
+    std = torch.ones(H)
+    best_total_reward = -float('inf')
+    best_actions = None
 
+    for i in range(I):
+        # Gerar sequências de ações candidatas
+        dist = Normal(mean, std)
+        action_sequences = dist.sample((J,))  # Forma (J, H)
+        action_sequences = torch.clamp(action_sequences, -1.0, 1.0)  # TODO: ver qual as acoes
+        
+        total_rewards = torch.zeros(J)
+
+        initial_state = #TODO
+        """
+
+        # Codificar estado inicial
+        initial_obs, _ = env.reset()
+        initial_state = rssm.encode(initial_obs[None], None)  # [1, state_dim]
+
+            for j in range(J):
+        state = initial_state.clone()
+        total_reward = 0.0
+        
+        for t in range(H):
+            action = action_sequences[j, t].unsqueeze(0)  # [1, action_dim]
+            
+            # Predizer próximo estado e recompensa usando o RSSM
+            state, reward = rssm.predict(state, action)
+            total_reward += reward.item()
+            
+        total_rewards[j] = total_reward
+
+        """
+        
+        for j in range(J):
+            # Fazer cópia do ambiente para simular sem afetar o estado real
+            temp_env = gym.make("MountainCarContinuous-v0") #TODO: trocar pelo rssm
+            temp_env.reset()
+            temp_env.unwrapped.state = env.unwrapped.state  # Copiar estado atual
+            
+            total_reward = 0.0
+            
+            for t in range(H):
+                action = action_sequences[j, t].item()
+                obs, reward, terminated, truncated, _ = temp_env.step([action])
+                total_reward += reward
+                
+                if terminated or truncated:
+                    break
+                    
+            total_rewards[j] = total_reward
+            temp_env.close()
+        
+        # Selecionar as K melhores sequências
+        top_rewards, top_indices = torch.topk(total_rewards, K)
+        top_actions = action_sequences[top_indices]
+        
+        # Atualizar a distribuição
+        mean = top_actions.mean(dim=0)
+        std = top_actions.std(dim=0, unbiased=True) + 1e-6  # Evitar std zero
+        
+        # Manter registro da melhor sequência encontrada
+        current_best_reward = top_rewards[0].item()
+        print(current_best_reward)
+        if current_best_reward > best_total_reward:
+            best_total_reward = current_best_reward
+            best_actions = top_actions[0]
+
+        if current_best_reward > 0:
+            print(current_best_reward)
+            break
+
+    # Executar a melhor sequência encontrada no ambiente real
+    if best_actions is not None:
+        for t in range(H):
+            action = best_actions[t].item()
+            observation, reward, terminated, truncated, _ = env.step([action])
+            
+            if terminated or truncated:
+                break
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
@@ -222,6 +304,8 @@ if __name__ == "__main__":
         [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
+
+    print(envs.single_action_space.n)
 
     rssm = TransitionModel(args.latent_dim, args.belief_size, args.hidden_size, args.future_rnn, args.action_dim, args.mean_only, args.min_stddev, args.num_layers)
     rssm_optimizer = optim.Adam(rssm.parameters(), lr=args.learning_rate)
