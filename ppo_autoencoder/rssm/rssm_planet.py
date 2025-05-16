@@ -110,7 +110,6 @@ def make_env(env_id, idx, capture_video, run_name):
 
     return thunk
 
-
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
@@ -175,90 +174,6 @@ def reparameterize(mu, logvar):
     std = torch.exp(0.5 * logvar)
     eps = torch.randn_like(std)
     return mu + eps * std
-
-def planner_discrete(env, H, J, batch, initial_obs, rssm): #TODO: colocar batch
-    # Inicializar distribuição das ações (contínuas entre -1 e 1)
-    mean = torch.zeros(H)
-    std = torch.ones(H)
-    best_total_reward = -float('inf')
-    best_actions = None
-
-    for i in range(I):
-        # Gerar sequências de ações candidatas
-        dist = Normal(mean, std)
-        action_sequences = dist.sample((J,))  # Forma (J, H)
-        action_sequences = torch.clamp(action_sequences, -1.0, 1.0)  # TODO: ver qual as acoes
-        
-        total_rewards = torch.zeros(J)
-
-        initial_state = #TODO
-        """
-
-        # Codificar estado inicial
-        initial_obs, _ = env.reset()
-        initial_state = rssm.encode(initial_obs[None], None)  # [1, state_dim]
-
-            for j in range(J):
-        state = initial_state.clone()
-        total_reward = 0.0
-        
-        for t in range(H):
-            action = action_sequences[j, t].unsqueeze(0)  # [1, action_dim]
-            
-            # Predizer próximo estado e recompensa usando o RSSM
-            state, reward = rssm.predict(state, action)
-            total_reward += reward.item()
-            
-        total_rewards[j] = total_reward
-
-        """
-        
-        for j in range(J):
-            # Fazer cópia do ambiente para simular sem afetar o estado real
-            temp_env = gym.make("MountainCarContinuous-v0") #TODO: trocar pelo rssm
-            temp_env.reset()
-            temp_env.unwrapped.state = env.unwrapped.state  # Copiar estado atual
-            
-            total_reward = 0.0
-            
-            for t in range(H):
-                action = action_sequences[j, t].item()
-                obs, reward, terminated, truncated, _ = temp_env.step([action])
-                total_reward += reward
-                
-                if terminated or truncated:
-                    break
-                    
-            total_rewards[j] = total_reward
-            temp_env.close()
-        
-        # Selecionar as K melhores sequências
-        top_rewards, top_indices = torch.topk(total_rewards, K)
-        top_actions = action_sequences[top_indices]
-        
-        # Atualizar a distribuição
-        mean = top_actions.mean(dim=0)
-        std = top_actions.std(dim=0, unbiased=True) + 1e-6  # Evitar std zero
-        
-        # Manter registro da melhor sequência encontrada
-        current_best_reward = top_rewards[0].item()
-        print(current_best_reward)
-        if current_best_reward > best_total_reward:
-            best_total_reward = current_best_reward
-            best_actions = top_actions[0]
-
-        if current_best_reward > 0:
-            print(current_best_reward)
-            break
-
-    # Executar a melhor sequência encontrada no ambiente real
-    if best_actions is not None:
-        for t in range(H):
-            action = best_actions[t].item()
-            observation, reward, terminated, truncated, _ = env.step([action])
-            
-            if terminated or truncated:
-                break
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
@@ -335,11 +250,17 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
 
     for iteration in range(1, args.num_iterations + 1):
-        # Annealing the rate if instructed to do so.
-        if args.anneal_lr:
-            frac = 1.0 - (iteration - 1.0) / args.num_iterations
-            lrnow = frac * args.learning_rate
-            optimizer.param_groups[0]["lr"] = lrnow
+        # Data collection and model fitting
+        hidden_state = torch.zeros(args.num_envs, args.rssm_hidden_size, device=device)
+        prev_action = torch.zeros(args.num_envs, args.action_dim, device=device)
+        belief_state = None
+        
+        # Listas para acumular transições da iteração atual
+        episode_obs = []
+        episode_actions = []
+        episode_next_obs = []
+        episode_rewards = []
+        episode_dones = []
 
         for step in range(0, args.num_steps):
             global_step += args.num_envs
@@ -348,19 +269,50 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                mu, logvar = encoder.forward(next_obs/255.0)
-                next_obs_latent = reparameterize(mu, logvar)
-                action, logprob, _, value = agent.get_action_and_value(next_obs_latent)
-                values[step] = value.flatten()
+                mu, logvar = encoder(next_obs/255.0)
+                next_obs_latent, hidden_state, belief_state = rssm.update_belief(
+                    next_obs/255.0, 
+                    prev_action, 
+                    hidden_state,
+                    belief_state
+                )
+                
+                action = planner(
+                    belief_state=belief_state,
+                    hidden_state=hidden_state,
+                    num_samples=args.cem_num_samples,
+                    horizon=args.planning_horizon,
+                    top_k=args.cem_top_k
+                )
+                
+                if args.exploration_noise > 0:
+                    noise = torch.randn_like(action) * args.exploration_noise
+                    action = torch.clamp(action + noise, -1, 1)
+            
             actions[step] = action
-            logprobs[step] = logprob
+            prev_action = action.clone()
+            
+            # Action Repeat
+            total_reward = 0
+            for k in range(args.action_repeat):
+                next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
+                total_reward += reward
+                if terminations.any() or truncations.any():
+                    break
+            
+            # Armazenar transição atual
+            episode_obs.append(next_obs_latent)
+            episode_actions.append(action)
+            episode_next_obs.append(next_obs.clone())
+            episode_rewards.append(torch.tensor(total_reward, dtype=torch.float32, device=device))
+            episode_dones.append(torch.tensor(
+                np.logical_or(terminations, truncations), dtype=torch.float32, device=device))
+            
+            # Atualizar para próximo passo
+            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(
+                np.logical_or(terminations, truncations)).to(device)
 
-            # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
-            next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
-
+            # Logging
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     if info and "episode" in info:
@@ -368,102 +320,87 @@ if __name__ == "__main__":
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
-        # bootstrap value if not done
-        with torch.no_grad():
-            mu, logvar = encoder.forward(next_obs/255.0)
-            next_obs_latent = reparameterize(mu, logvar)
-            next_value = agent.get_value(next_obs_latent).reshape(1, -1)
-            advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
-                else:
-                    nextnonterminal = 1.0 - dones[t + 1]
-                    nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            returns = advantages + values
-
-        # flatten the batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
-        b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = advantages.reshape(-1)
-        b_returns = returns.reshape(-1)
-        b_values = values.reshape(-1)
-
-        # Optimizing the policy and value network
-        b_inds = np.arange(args.batch_size)
-        clipfracs = []
-        for epoch in range(args.update_epochs):
-            np.random.shuffle(b_inds)
-            for start in range(0, args.batch_size, args.minibatch_size):
-                end = start + args.minibatch_size
-                mb_inds = b_inds[start:end]
-
-                mu, logvar = encoder.forward(b_obs[mb_inds]/255.0)
-                next_obs_latent = reparameterize(mu, logvar)
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(next_obs_latent, b_actions.long()[mb_inds])
-                logratio = newlogprob - b_logprobs[mb_inds]
-                ratio = logratio.exp()
-
-                with torch.no_grad():
-                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
-                    old_approx_kl = (-logratio).mean()
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
-
-                mb_advantages = b_advantages[mb_inds]
-                if args.norm_adv:
-                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-                # Policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-                # Value loss
-                newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
-                else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
-
-                #recon loss
-                recon_images = decoder.forward(next_obs_latent)
-                recon_loss = vae_loss(recon_images, b_obs[mb_inds] / 255, mu, logvar)
-                recon_loss = recon_loss.mean()
-
-                entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef + recon_loss * args.recon_coef
-
-                optimizer.zero_grad()
-                encoder_optimizer.zero_grad()
-                decoder_optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(encoder.parameters(), args.max_grad_norm)
-                nn.utils.clip_grad_norm_(decoder.parameters(), args.max_grad_norm)
-                optimizer.step()
-                encoder_optimizer.step()
-                decoder_optimizer.step()
+        # Model Fitting com os dados coletados nesta iteração
+        if len(episode_obs) > 0:  # Se coletamos algum dado
+            # Converter listas para tensores
+            b_obs = torch.stack(episode_obs)
+            b_actions = torch.stack(episode_actions)
+            b_next_obs = torch.stack(episode_next_obs)
+            b_rewards = torch.stack(episode_rewards)
+            b_dones = torch.stack(episode_dones)
+            
+            # Dimensões: [seq_len, num_envs, ...] -> [num_envs, seq_len, ...]
+            b_obs = b_obs.transpose(0, 1)
+            b_actions = b_actions.transpose(0, 1)
+            b_next_obs = b_next_obs.transpose(0, 1)
+            b_rewards = b_rewards.transpose(0, 1)
+            b_dones = b_dones.transpose(0, 1)
+            
+            for epoch in range(args.epochs_model_fitting):
+                # Processar cada ambiente separadamente
+                for env_idx in range(args.num_envs):
+                    # Resetar estados ocultos para este ambiente
+                    env_hidden_state = torch.zeros(1, args.rssm_hidden_size, device=device)
+                    env_prev_action = torch.zeros(1, args.action_dim, device=device)
+                    env_belief_state = None
+                    
+                    # Listas para acumular losses
+                    recon_losses = []
+                    kl_losses = []
+                    
+                    # Processar cada passo temporal deste ambiente
+                    for t in range(len(episode_obs) // args.num_envs):
+                        # 1. Codificar observação atual
+                        mu, logvar = encoder(b_obs[env_idx, t].unsqueeze(0)/255.0)
+                        posterior_dist = torch.distributions.Normal(mu, logvar.exp().sqrt())
+                        
+                        # 2. Atualizar crença (RSSM)
+                        latent_state, env_hidden_state, env_belief_state = rssm.update_belief(
+                            b_obs[env_idx, t].unsqueeze(0)/255.0, 
+                            env_prev_action, 
+                            env_hidden_state,
+                            env_belief_state
+                        )
+                        
+                        # 3. Obter prior (transição)
+                        prior_mu, prior_logvar = rssm.transition_model(env_hidden_state, env_prev_action)
+                        prior_dist = torch.distributions.Normal(prior_mu, prior_logvar.exp().sqrt())
+                        
+                        # 4. Calcular termo de reconstrução
+                        recon_mu, recon_logvar = decoder(latent_state)
+                        recon_dist = torch.distributions.Normal(recon_mu, recon_logvar.exp().sqrt())
+                        recon_loss = -recon_dist.log_prob(b_next_obs[env_idx, t].unsqueeze(0)/255.0).mean()
+                        
+                        # 5. Calcular termo KL
+                        kl_loss = torch.distributions.kl_divergence(posterior_dist, prior_dist).mean()
+                        
+                        # Acumular losses
+                        recon_losses.append(recon_loss)
+                        kl_losses.append(kl_loss)
+                        
+                        # Atualizar ação anterior
+                        env_prev_action = b_actions[env_idx, t].unsqueeze(0)
+                    
+                    # Calcular losses médias para este ambiente
+                    if recon_losses:  # Se houve dados para processar
+                        avg_recon_loss = torch.stack(recon_losses).mean()
+                        avg_kl_loss = torch.stack(kl_losses).mean()
+                        total_loss = avg_recon_loss + args.kl_weight * avg_kl_loss
+                        
+                        # Backpropagation
+                        optimizer.zero_grad()
+                        total_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(parameters, args.max_grad_norm)
+                        optimizer.step()
+                        
+                        # Logging (apenas no último epoch)
+                        if epoch == args.epochs_model_fitting - 1 and iteration % args.log_interval == 0:
+                            writer.add_scalar("losses/total_loss", total_loss.item(), global_step)
+                            writer.add_scalar("losses/recon_loss", avg_recon_loss.item(), global_step)
+                            writer.add_scalar("losses/kl_loss", avg_kl_loss.item(), global_step)
 
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
-
-        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
