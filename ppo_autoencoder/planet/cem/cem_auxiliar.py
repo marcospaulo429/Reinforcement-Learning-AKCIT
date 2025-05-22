@@ -22,8 +22,66 @@ def setup_env(env_id):
     elif env_id.lower() == "pendulum":
         return setup_pendulum()
     else:
-        raise ValueError(f"Ambiente '{env_id}' não suportado. Tente 'cartpole' ou 'pendulum'.")
+        return setup_atari()
 
+import gymnasium as gym
+import os # Importar para criar diretórios para vídeos
+
+def setup_atari(env_id, capture_video=False, run_name="cem_atari"):
+    """
+    Configura e retorna um ambiente Gymnasium com base no ID fornecido.
+    Aplica wrappers comuns e, opcionalmente, gravação de vídeo.
+
+    Args:
+        env_id (str): O ID do ambiente a ser criado (ex: "CartPole-v1", "Pendulum-v1").
+        capture_video (bool, optional): Se True, o ambiente será envolvido com RecordVideo
+                                        para gravar a execução. Defaults to False.
+        run_name (str, optional): Um nome para a pasta de vídeos, se a gravação estiver ativada.
+                                  Ajuda a organizar os vídeos. Defaults to "cem_run".
+
+    Returns:
+        tuple: Uma tupla contendo:
+            - env (gym.Env): A instância do ambiente Gymnasium configurada.
+            - obs_shape (int): A dimensão do espaço de observação.
+            - act_shape (int): A dimensão do espaço de ação (número de ações discretas
+                               ou dimensão do vetor de ação contínuo).
+    """
+    # 1. Cria o ambiente base.
+    # render_mode="rgb_array" é necessário para RecordVideo. Se não for gravar, pode ser None.
+    env = gym.make(env_id, render_mode="rgb_array" if capture_video else None)
+
+    # 2. Aplica o wrapper de gravação de vídeo, se solicitado.
+    if capture_video:
+        # Cria o diretório para salvar os vídeos, se não existir.
+        video_folder = f"videos/{run_name}"
+        os.makedirs(video_folder, exist_ok=True)
+        # Envolve o ambiente com RecordVideo.
+        env = gym.wrappers.RecordVideo(env, video_folder=video_folder, name_prefix=env_id)
+
+    # 3. Aplica o wrapper para registrar estatísticas do episódio (recompensa total, duração).
+    # Isso é útil para o log e plotagem do histórico.
+    env = gym.wrappers.RecordEpisodeStatistics(env)
+
+    # 4. Determina obs_shape e act_shape.
+    # obs_shape: A primeira dimensão do espaço de observação (número de características).
+    obs_shape = env.observation_space.shape[0]
+
+    # act_shape: Depende se o espaço de ação é discreto ou contínuo.
+    if isinstance(env.action_space, gym.spaces.Discrete):
+        # Para espaços discretos (ex: CartPole), act_shape é o número de ações possíveis.
+        act_shape = env.action_space.n
+    elif isinstance(env.action_space, gym.spaces.Box):
+        # Para espaços contínuos (ex: Pendulum), act_shape é a dimensão do vetor de ação.
+        act_shape = env.action_space.shape[0]
+    else:
+        # Levanta um erro se o tipo de espaço de ação não for reconhecido.
+        raise ValueError(f"Tipo de espaço de ação não suportado: {type(env.action_space)}")
+
+    return env, obs_shape, act_shape
+
+# Nota: As funções setup_cartpole e setup_pendulum separadas não são mais necessárias
+# pois setup_env agora lida com a criação de qualquer ambiente Gym válido.
+# Você pode chamar setup_env("CartPole-v1") ou setup_env("Pendulum-v1") diretamente.
 
 def setup_pendulum():
     """
