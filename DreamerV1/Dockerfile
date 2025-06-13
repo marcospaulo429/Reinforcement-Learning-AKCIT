@@ -1,29 +1,32 @@
-# Use CUDA 12.4 base image
 FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
-# Base multi-arch oficial do Python, compatível com ARM (Mac M1)
-#FROM python:3.10-slim
+#FROM nvidia/cuda:11.4.2-runtime-ubuntu20.04
 
-# Instala dependências do sistema
-RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3-pip \
+# install ubuntu dependencies
+ENV DEBIAN_FRONTEND=noninteractive 
+RUN apt-get update && \
+    apt-get -y install python3-pip xvfb ffmpeg git build-essential python3-opengl
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# install python dependencies
+RUN mkdir cleanrl_utils && touch cleanrl_utils/__init__.py
+RUN pip install poetry --upgrade
+COPY pyproject.toml pyproject.toml
+COPY poetry.lock poetry.lock README.md
+RUN poetry install --no-root
+
+# install mujoco_py
+RUN apt-get -y install wget unzip software-properties-common \
+    libgl1-mesa-dev \
     libgl1-mesa-glx \
-    libosmesa6 \
-    libosmesa6-dev \
-    libglfw3 \
-    patchelf \
-  && apt-get clean && rm -rf /var/lib/apt/lists/*
+    libglew-dev \
+    libosmesa6-dev patchelf
+#RUN poetry install -E "atari mujoco"
+RUN poetry install -E "atari mujoco" --no-root
+RUN poetry run python -c "import mujoco"
 
-# Configura o ambiente Python
-WORKDIR /app
-COPY requirements.txt .
+# copy local files
+COPY . /dreamer
 
-RUN pip install --upgrade pip && \
-    pip install PyOpenGL==3.1.0 && \
-    pip install -r requirements.txt
-
-# Copia o restante do código
-COPY . .
-
-# Comando de execução
-CMD ["python3", "main.py"]
+# Define o ponto de entrada para rodar o script dreamer.py
+# Usamos 'poetry run' para garantir que o script seja executado no ambiente Poetry
+ENTRYPOINT ["poetry", "run", "python3", "/dreamer/dreamer.py"]

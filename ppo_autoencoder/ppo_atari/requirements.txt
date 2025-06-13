@@ -1,5 +1,5 @@
 absl-py==1.4.0 ; python_version >= "3.8" and python_version < "3.11"
-ale-py==0.11 ; python_version >= "3.8" and python_version < "3.11"
+ale-py==0.8.1 ; python_version >= "3.8" and python_version < "3.11"
 appdirs==1.4.4 ; python_version >= "3.8" and python_version < "3.11"
 autorom-accept-rom-license==0.6.1 ; python_version >= "3.8" and python_version < "3.11"
 autorom[accept-rom-license]==0.4.2 ; python_version >= "3.8" and python_version < "3.11"
