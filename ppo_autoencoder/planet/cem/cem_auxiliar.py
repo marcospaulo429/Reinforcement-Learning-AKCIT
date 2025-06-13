@@ -1,8 +1,18 @@
 import gymnasium as gym
-import numpy as np # Embora numpy não seja diretamente usado aqui, é comum em projetos de RL
+import numpy as np
+from stable_baselines3.common.atari_wrappers import (
+    ClipRewardEnv,
+    EpisodicLifeEnv,
+    FireResetEnv,
+    MaxAndSkipEnv,
+    NoopResetEnv,
+)
+
+import os # Importar para criar diretórios para vídeos
+import matplotlib.pyplot as plt
 
 
-def setup_env(env_id):
+def setup_env(env_id): # Removido run_name daqui, pois não é usado diretamente nas funções setup_*
     """
     Configura e retorna um ambiente Gymnasium com base no ID fornecido.
     Adiciona atributos personalizados 'type' e 'shape' ao action_space
@@ -14,7 +24,7 @@ def setup_env(env_id):
     Returns:
         tuple: Uma tupla contendo:
             - env (gym.Env): A instância do ambiente Gymnasium.
-            - obs_shape (int): A dimensão do espaço de observação.
+            - obs_shape (tuple/int): A dimensão do espaço de observação. Pode ser int para obs vetoriais ou tuple para imagens.
             - act_shape (int): A dimensão do espaço de ação (número de ações discretas ou dimensão do vetor de ação contínuo).
     """
     if env_id.lower() == "cartpole":
@@ -22,111 +32,57 @@ def setup_env(env_id):
     elif env_id.lower() == "pendulum":
         return setup_pendulum()
     else:
-        return setup_atari()
+        # Passa env_id, mas 'run_name' e 'capture_video' não são necessários aqui
+        # pois setup_atari é mais um "builder" de ambiente base.
+        # A informação de vídeo e run_name é mais relevante na chamada evaluate_theta.
+        return setup_atari(env_id=env_id)
 
-import gymnasium as gym
-import os # Importar para criar diretórios para vídeos
 
-def setup_atari(env_id, capture_video=False, run_name="cem_atari"):
-    """
-    Configura e retorna um ambiente Gymnasium com base no ID fornecido.
-    Aplica wrappers comuns e, opcionalmente, gravação de vídeo.
-
-    Args:
-        env_id (str): O ID do ambiente a ser criado (ex: "CartPole-v1", "Pendulum-v1").
-        capture_video (bool, optional): Se True, o ambiente será envolvido com RecordVideo
-                                        para gravar a execução. Defaults to False.
-        run_name (str, optional): Um nome para a pasta de vídeos, se a gravação estiver ativada.
-                                  Ajuda a organizar os vídeos. Defaults to "cem_run".
-
-    Returns:
-        tuple: Uma tupla contendo:
-            - env (gym.Env): A instância do ambiente Gymnasium configurada.
-            - obs_shape (int): A dimensão do espaço de observação.
-            - act_shape (int): A dimensão do espaço de ação (número de ações discretas
-                               ou dimensão do vetor de ação contínuo).
-    """
-    # 1. Cria o ambiente base.
-    # render_mode="rgb_array" é necessário para RecordVideo. Se não for gravar, pode ser None.
-    env = gym.make(env_id, render_mode="rgb_array" if capture_video else None)
-
-    # 2. Aplica o wrapper de gravação de vídeo, se solicitado.
-    if capture_video:
-        # Cria o diretório para salvar os vídeos, se não existir.
-        video_folder = f"videos/{run_name}"
-        os.makedirs(video_folder, exist_ok=True)
-        # Envolve o ambiente com RecordVideo.
-        env = gym.wrappers.RecordVideo(env, video_folder=video_folder, name_prefix=env_id)
-
-    # 3. Aplica o wrapper para registrar estatísticas do episódio (recompensa total, duração).
-    # Isso é útil para o log e plotagem do histórico.
+def setup_atari(env_id, capture_video=False): # Removido run_name, pois não é usado aqui
+    env = gym.make(env_id)
     env = gym.wrappers.RecordEpisodeStatistics(env)
+    env = NoopResetEnv(env, noop_max=30)
+    env = MaxAndSkipEnv(env, skip=4)
+    env = EpisodicLifeEnv(env)
+    if "FIRE" in env.unwrapped.get_action_meanings():
+        env = FireResetEnv(env)
+    env = ClipRewardEnv(env)
+    env = gym.wrappers.ResizeObservation(env, (84, 84))
+    env = gym.wrappers.GrayScaleObservation(env)
+    env = gym.wrappers.FrameStack(env, 4)
 
-    # 4. Determina obs_shape e act_shape.
-    # obs_shape: A primeira dimensão do espaço de observação (número de características).
-    obs_shape = env.observation_space.shape[0]
-
-    # act_shape: Depende se o espaço de ação é discreto ou contínuo.
-    if isinstance(env.action_space, gym.spaces.Discrete):
-        # Para espaços discretos (ex: CartPole), act_shape é o número de ações possíveis.
-        act_shape = env.action_space.n
-    elif isinstance(env.action_space, gym.spaces.Box):
-        # Para espaços contínuos (ex: Pendulum), act_shape é a dimensão do vetor de ação.
-        act_shape = env.action_space.shape[0]
-    else:
-        # Levanta um erro se o tipo de espaço de ação não for reconhecido.
-        raise ValueError(f"Tipo de espaço de ação não suportado: {type(env.action_space)}")
-
-    return env, obs_shape, act_shape
-
-# Nota: As funções setup_cartpole e setup_pendulum separadas não são mais necessárias
-# pois setup_env agora lida com a criação de qualquer ambiente Gym válido.
-# Você pode chamar setup_env("CartPole-v1") ou setup_env("Pendulum-v1") diretamente.
-
-def setup_pendulum():
-    """
-    Configura o ambiente Pendulum-v1.
-
-    Returns:
-        tuple: (env, obs_shape, act_shape)
-    """
-    # Usando Pendulum-v1, que é a versão mais recente e recomendada
-    env = gym.make("Pendulum-v1")
-    obs_shape = env.observation_space.shape[0]
-    act_shape = env.action_space.shape[0] # Para espaços de ação contínuos, é a dimensão do vetor
+    # Para ambientes de imagem como Atari, obs_shape será uma tupla (canais, altura, largura)
+    # Por exemplo: (4, 84, 84). O CEM usará latent_dim em vez disso para theta_dim.
+    obs_shape = env.observation_space.shape
+    act_shape = env.action_space.n # Ações são discretas para Atari
 
     # Adiciona um atributo personalizado 'type' ao action_space para que a política possa identificá-lo
+    env.action_space.type = "discrete" # Atari é sempre discreto
+
+    return env, obs_shape, act_shape # Retorna a tupla esperada
+
+
+def setup_pendulum():
+    env = gym.make("Pendulum-v1")
+    obs_shape = env.observation_space.shape[0]
+    act_shape = env.action_space.shape[0]
+
     env.action_space.type = "continuous"
     return env, obs_shape, act_shape
 
 
 def setup_cartpole():
-    """
-    Configura o ambiente CartPole-v1.
-
-    Returns:
-        tuple: (env, obs_shape, act_shape)
-    """
-    # Usando CartPole-v1, que é a versão mais recente e recomendada
     env = gym.make("CartPole-v1")
     obs_shape = env.observation_space.shape[0]
-    act_shape = env.action_space.n # Para espaços de ação discretos, é o número de ações
+    act_shape = env.action_space.n
 
-    # Adiciona um atributo personalizado 'type' ao action_space para que a política possa identificá-lo
     env.action_space.type = "discrete"
-
-    # O espaço de ação discreto no Gymnasium tem shape vazio (),
-    # mas o código original espera (1,) para o cálculo de theta_dim.
-    # Adicionamos este atributo personalizado para manter a compatibilidade.
     return env, obs_shape, act_shape
-
-
-import matplotlib.pyplot as plt
 
 
 def plot_history(history, env_id, num_episodes, expt_time):
     f, ax = plt.subplots(nrows=2, sharex=True, figsize=(10, 10))
-    f.suptitle("{} {} samples {:0.0f} seconds".format(env_id, num_episodes, expt_time))
+    f.suptitle(f"{env_id} {num_episodes} samples {expt_time:.0f} seconds") # Usando f-string
     ax[0].plot(history["epoch"], history["avg_rew"], label="population")
     ax[0].plot(history["epoch"], history["avg_elites"], label="elite")
     ax[0].legend()
@@ -138,31 +94,14 @@ def plot_history(history, env_id, num_episodes, expt_time):
     ax[1].set_xlabel("epoch")
     ax[1].set_ylabel("standard deivation rewards")
 
-    f.savefig("./{}/learning.png".format(env_id))
-
-import gymnasium as gym
-import numpy as np
+    f.savefig(f"./{env_id}/learning.png") # Usando f-string
 
 
-def setup_policy(env, theta):
-    """
-    Cria uma instância da política apropriada (DiscretePolicy ou ContinuousPolicy)
-    com base no tipo do espaço de ação do ambiente.
-
-    Args:
-        env (gym.Env): O ambiente Gymnasium.
-        theta (np.ndarray): O vetor de parâmetros da política.
-
-    Returns:
-        object: Uma instância de DiscretePolicy ou ContinuousPolicy.
-
-    Raises:
-        ValueError: Se o tipo do espaço de ação não for discreto nem contínuo.
-    """
+def setup_policy(env, theta, use_latent, latent_dim):
     if hasattr(env.action_space, 'type') and env.action_space.type == "discrete":
-        return DiscretePolicy(env, theta)
+        return DiscretePolicy(env, theta, use_latent, latent_dim)
     elif isinstance(env.action_space, gym.spaces.Discrete):
-        return DiscretePolicy(env, theta)
+        return DiscretePolicy(env, theta, use_latent, latent_dim)
     elif hasattr(env.action_space, 'type') and env.action_space.type == "continuous":
         return ContinuousPolicy(env, theta)
     elif isinstance(env.action_space, gym.spaces.Box):
@@ -172,10 +111,6 @@ def setup_policy(env, theta):
 
 
 class ContinuousPolicy:
-    """
-    Uma política linear para espaços de ação contínuos.
-    A ação é calculada como: action = clip(observation.dot(W) + b, low, high).
-    """
     def __init__(self, env, theta):
         self.env = env
         obs_shape = env.observation_space.shape[0]
@@ -192,70 +127,42 @@ class ContinuousPolicy:
         action = observation.dot(self.W) + self.b
         return np.clip(action, self.env.action_space.low, self.env.action_space.high)
 
-
-
 class DiscretePolicy:
-    """
-    Uma política linear para espaços de ação discretos.
-    A ação é selecionada como o índice que maximiza a saída de uma função linear
-    aplicada à observação, seguida pela adição de um bias.
-    """
-    def __init__(self, env, theta):
-        """
-        Inicializa a política discreta.
-
-        Args:
-            env (gym.Env): O ambiente Gymnasium associado. Usado para obter informações
-                           sobre o espaço de observação e o espaço de ação.
-            theta (np.ndarray): Um vetor 1D contendo os parâmetros da política.
-                                Esses parâmetros serão usados para definir a matriz de
-                                pesos (W) e o vetor de bias (b).
-        """
+    def __init__(self, env, theta, use_latent = False, latent_dim = 0):
         self.env = env
-        # Obtém a dimensionalidade do espaço de observação.
-        # Por exemplo, para o CartPole, obs_shape é 4.
-        obs_shape = env.observation_space.shape[0]
-        # Obtém o número de ações discretas possíveis no ambiente.
-        # Por exemplo, para o CartPole, num_actions é 2 (esquerda ou direita).
+        if use_latent: # Se estiver usando latent_dim, use-o como a dimensão de observação
+            obs_input_dim = latent_dim
+        else: # Caso contrário, use a dimensão real do espaço de observação
+            # Para ambientes de imagem (que têm obs_space.shape como tupla), precisamos
+            # pegar o produto das dimensões se não usarmos o encoder.
+            # Como estamos sempre usando o encoder para imagens aqui, essa parte
+            # seria mais complexa sem o use_latent.
+            # Assumimos que se use_latent é False, o env.observation_space.shape[0] faz sentido.
+            obs_input_dim = env.observation_space.shape[0] 
+            # Note: Para ambientes Atari sem encoder, obs_shape seria (4, 84, 84),
+            # e obs_input_dim deveria ser 4*84*84. O `use_latent` simplifica isso.
+
         num_actions = env.action_space.n
-        # Calcula o tamanho esperado do vetor de parâmetros 'theta'.
-        # Para cada ação, temos 'obs_shape' pesos (um para cada dimensão da observação)
-        # e 1 bias. Multiplicamos pelo número de ações para cobrir todas elas.
-        expected_theta_len = (obs_shape + 1) * num_actions
-        # Garante que o vetor de parâmetros 'theta' fornecido tem o tamanho esperado.
-        # Se não tiver, isso indica que a política não foi inicializada corretamente.
+        # A dimensão esperada do theta é (dimensão de entrada da política + 1 para o bias) * num_actions
+        # O bias está embutido no theta_dim total, e 'b' é extraído posteriormente.
+        # No seu setup, 'b' é pego de theta[parameter_dim:] o que significa que o bias é adicionado
+        # separadamente e não é parte da matriz W.
+        # Então, o cálculo do `expected_theta_len` deve ser `obs_input_dim * num_actions + num_actions`
+        # ou `(obs_input_dim + 1) * num_actions`
+        # De acordo com seu código original `self.b = theta[self.parameter_dim :]`,
+        # o `self.b` tem `num_actions` elementos.
+        # E `self.parameter_dim` é `obs_shape * num_actions`.
+        # Assim, o comprimento total é `obs_input_dim * num_actions + num_actions`
+        expected_theta_len = (obs_input_dim) * num_actions + num_actions # pesos + bias para cada ação
+        
         assert len(theta) == expected_theta_len, \
             f"Tamanho incorreto de theta para DiscretePolicy. Esperado {expected_theta_len}, recebido {len(theta)}."
 
-        # Calcula a dimensão total dos pesos da matriz 'W'.
-        # É o número de dimensões da observação multiplicado pelo número de ações.
-        self.parameter_dim = obs_shape * num_actions
-        # Extrai os pesos da matriz 'W' da primeira parte do vetor 'theta'.
-        # A matriz 'W' tem uma forma de (obs_shape, num_actions), onde cada coluna
-        # corresponde aos pesos para calcular a preferência por uma ação específica
-        # com base na observação.
-        self.W = theta[: self.parameter_dim].reshape(obs_shape, num_actions)
-        # Extrai os biases da última parte do vetor 'theta'.
-        # O vetor 'b' tem um tamanho igual ao número de ações, com um bias para cada ação.
+        self.parameter_dim = obs_input_dim * num_actions
+        self.W = theta[: self.parameter_dim].reshape(obs_input_dim, num_actions)
         self.b = theta[self.parameter_dim :]
 
     def act(self, observation):
-        """
-        Decide qual ação tomar com base na observação atual.
-
-        Args:
-            observation (np.ndarray): A observação atual do ambiente.
-
-        Returns:
-            int: O índice da ação discreta a ser tomada.
-        """
-        # Calcula uma pontuação (ou "logit") para cada ação possível.
-        # Isso é feito multiplicando a observação pela matriz de pesos 'W' e
-        # adicionando o vetor de bias 'b'.
-        # O resultado 'y' é um vetor onde cada elemento corresponde à pontuação de uma ação.
         y = observation.dot(self.W) + self.b
-        # Seleciona a ação com a maior pontuação. 'np.argmax(y)' retorna o índice
-        # do elemento máximo no vetor 'y'. Como os índices correspondem às ações
-        # discretas, este índice é a ação escolhida pela política.
         action = np.argmax(y)
         return action

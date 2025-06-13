@@ -2,9 +2,18 @@ DreamerV1/autoencoder
 ppo/models/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
 DreamerV1/models/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
 ppo/notebooks
-DreamerV1/notebooks
+dreamer_beta/notebooks
 ppo/wandb
 Papers
 Latent Reasoning
 ppo/models/checkpoint_dgx_treino3-lat128_lr0.0001_h128_epoch570.pt
 workload-daemon
+*/runs/**
+*/__pycache__/**
+*/wandb/**
+ppo_autoencoder/ppo_decoder/runs
+ppo_autoencoder/ppo_atari/runs
+ppo_autoencoder/ppo_encoder/runs
+DreamerV1/wandb
+DreamerV1/runs
+DreamerV1/models

@@ -1,8 +1,0 @@
-*.png
-*.npz
-*.log
-*.pyc
-*.pth
-
-.idea/
-runs/
