@@ -17,3 +17,4 @@ ppo_autoencoder/ppo_encoder/runs
 DreamerV1/wandb
 DreamerV1/runs
 DreamerV1/models
+ppo_autoencoder/ppo_decoder/wandb
