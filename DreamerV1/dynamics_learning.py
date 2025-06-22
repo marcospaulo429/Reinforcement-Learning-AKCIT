@@ -1,41 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from models import reparameterize
 
 def dynamics_learning(args, transition_model, reward_model, encoder, decoder, 
                       transition_optimizer, reward_optimizer, encoder_optimizer, 
                       decoder_optimizer, obs_seq, actions_seq, rewards_seq, device, vae_loss):
-    """
-    Performs one step of dynamics learning (World Model training).
-
-    Args:
-        args: An object containing various arguments/hyperparameters 
-              (e.g., num_envs, belief_size, latent_dim, num_steps, action_dim, 
-              kl_beta, reward_beta, recon_coef, max_grad_norm).
-        transition_model: The world model's transition component (RSSM).
-        reward_model: The world model's reward prediction component.
-        encoder: The observation encoder.
-        decoder: The observation decoder.
-        transition_optimizer: Optimizer for the transition model.
-        reward_optimizer: Optimizer for the reward model.
-        encoder_optimizer: Optimizer for the encoder.
-        decoder_optimizer: Optimizer for the decoder.
-        obs_seq (torch.Tensor): Sequence of observations, 
-                                 shape: [num_steps, num_envs, C, H, W].
-        actions_seq (torch.Tensor): Sequence of actions, 
-                                    shape: [num_steps, num_envs].
-        rewards_seq (torch.Tensor): Sequence of rewards, 
-                                    shape: [num_steps, num_envs].
-        device (torch.device): The device (CPU or GPU) to run computations on.
-        vae_loss (function): A function to calculate the VAE reconstruction loss.
-
-    Returns:
-        tuple: A tuple containing the calculated losses:
-               - total_world_model_loss (torch.Tensor)
-               - kl_loss_wm (torch.Tensor)
-               - loss_reward_wm (torch.Tensor)
-               - recon_loss (torch.Tensor)
-    """
 
     # 1. Define initial states for the World Model for EACH ENVIRONMENT (num_envs)
     initial_belief = torch.zeros(args.num_envs, transition_model.belief_size).to(device)
@@ -63,18 +33,11 @@ def dynamics_learning(args, transition_model, reward_model, encoder, decoder,
     actions_for_posterior_one_hot = F.one_hot(actions_for_posterior_ids, num_classes=args.action_dim).float() 
     actions_for_prior_one_hot = F.one_hot(actions_for_prior_ids, num_classes=args.action_dim).float()      
 
-    obs_seq_normalized = obs_seq / 255.0
-
     # Reshape observations for the encoder: [num_steps * num_envs, C, H, W]
-    obs_seq_tomodel = obs_seq_normalized.view(-1, *obs_seq_normalized.shape[2:]) 
+    obs_seq = obs_seq.view(-1, *obs_seq.shape[2:]) 
     
     # Encode all flattened observations
-    mu, logvar = encoder(obs_seq_tomodel)
-    # Helper function for reparameterization trick (assuming it's defined elsewhere or in a utils file)
-    def reparameterize(mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+    mu, logvar = encoder(obs_seq / 255)
     obs_latents_wm_tomodel = reparameterize(mu, logvar)
     
     # Reshape latents back to sequence format: [num_steps, num_envs, latent_dim]
@@ -109,7 +72,7 @@ def dynamics_learning(args, transition_model, reward_model, encoder, decoder,
 
     # Reconstruction loss
     recon_images = decoder.forward(obs_latents_wm_tomodel)
-    recon_loss = vae_loss(recon_images, obs_seq_tomodel, mu, logvar)
+    recon_loss = vae_loss(recon_images, obs_seq / 255, mu, logvar)
     recon_loss = recon_loss.mean()
 
     # Total World Model loss
@@ -135,4 +98,4 @@ def dynamics_learning(args, transition_model, reward_model, encoder, decoder,
     reward_optimizer.step()
     encoder_optimizer.step()
 
-    return total_world_model_loss, kl_loss_wm, loss_reward_wm, recon_loss, obs_latents_wm_tomodel
+    return  encoder, decoder, transition_model, reward_model, total_world_model_loss, kl_loss_wm, loss_reward_wm, recon_loss, obs_latents_wm_tomodel

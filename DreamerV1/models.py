@@ -3,12 +3,92 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions.categorical import Categorical
+
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
+
+
+class Encoder(nn.Module):
+    def __init__(self, latent_dim=32):
+        super(Encoder, self).__init__()
+        self.latent_dim = latent_dim
+
+        # Camadas convolucionais
+        self.encoder_cnn = nn.Sequential(
+            layer_init(nn.Conv2d(4, 16, kernel_size=8, stride=4)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(16, 32, kernel_size=4, stride=2)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 32, kernel_size=3, stride=1)),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        
+        # Camadas fully connected para mu e logvar
+        self.encoder_fc_mu = layer_init(nn.Linear(32 * 7 * 7, latent_dim))
+        self.encoder_fc_logvar = layer_init(nn.Linear(32 * 7 * 7, latent_dim))
+
+    def forward(self, x):
+        x = self.encoder_cnn(x)
+        mu = self.encoder_fc_mu(x)
+        logvar = self.encoder_fc_logvar(x)
+        return mu, logvar
+
+class Decoder(nn.Module):
+    def __init__(self, latent_dim=32):
+        super(Decoder, self).__init__()
+
+        # Camada fully connected
+        self.decoder_fc = layer_init(nn.Linear(latent_dim, 32 * 7 * 7))
+        
+        # Camadas deconvolucionais (transpostas)
+        self.decoder_deconv = nn.Sequential(
+            nn.ReLU(),
+            nn.Unflatten(1, (32, 7, 7)),
+            nn.ConvTranspose2d(32, 32, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 4, kernel_size=8, stride=4),
+            nn.Sigmoid()
+        )
+
+    def forward(self, z):
+        x = self.decoder_fc(z)
+        return self.decoder_deconv(x)
+
+def vae_loss(recon_x, x, mu, logvar):
+    recon_loss = nn.functional.binary_cross_entropy(recon_x, x, reduction='mean')
+    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon_loss + kl
+
+class Agent(nn.Module):
+    def __init__(self, latent_dim, envs):
+        super().__init__()
+        self.actor = layer_init(nn.Linear(latent_dim, envs.single_action_space.n), std=0.01)
+        self.critic = layer_init(nn.Linear(latent_dim, 1), std=1)
+
+    def get_value(self, x):
+        return self.critic(x)
+
+    def get_action_and_value(self, x, action=None):
+        logits = self.actor(x)
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        return action, probs.log_prob(action), probs.entropy(), self.critic(x)
+
+
+def reparameterize(mu, logvar):
+    std = torch.exp(0.5 * logvar)
+    eps = torch.randn_like(std)
+    return mu + eps * std
+
 
 class RewardModel(nn.Module):
     def __init__(self, hidden_dim: int, state_dim: int):

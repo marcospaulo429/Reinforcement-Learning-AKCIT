@@ -7,14 +7,11 @@ from dataclasses import dataclass
 import gymnasium as gym
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import tyro
-from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from models import TransitionModel, RewardModel
+from models import TransitionModel, RewardModel, Encoder, Decoder, Agent, reparameterize, vae_loss
 from utils import test_world_model
 from dynamics_learning import dynamics_learning
 from behavior_learning import imagine_trajectories, behavior_learning
@@ -30,7 +27,7 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
 
 @dataclass
 class Args:
-    latent_dim: int = 512
+    latent_dim: int = 64
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     seed: int = 1
@@ -39,9 +36,9 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "cleanRL_dreamer"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -49,7 +46,7 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     treshold_save_model_reward: float = 100.0
 
-    belief_size: int = 200 # Tamanho do estado recorrente (h)
+    belief_size: int = latent_dim # Tamanho do estado recorrente (h)
     hidden_size: int = 200 # Tamanho das camadas ocultas nas MLPs do World Model
     future_rnn: bool = True # Se a GRU do transition model deve ser usada para o post_rnn_layers
     # action_dim: int = ? # Será obtido de envs.single_action_space.n
@@ -59,7 +56,7 @@ class Args:
 
     kl_beta: float = 1.0 # Peso para a perda KL do World Model
     reward_beta: float = 1.0 # Peso para a perda de recompensa do World Model
-    horizon_to_imagine: int = 10
+    horizon_to_imagine: int = 15
 
     # Algorithm specific arguments
     env_id: str = "BreakoutNoFrameskip-v4"
@@ -130,88 +127,6 @@ def make_env(env_id, idx, capture_video, run_name):
 
     return thunk
 
-
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-class Encoder(nn.Module):
-    def __init__(self, latent_dim=32):
-        super(Encoder, self).__init__()
-        self.latent_dim = latent_dim
-
-        # Camadas convolucionais
-        self.encoder_cnn = nn.Sequential(
-            layer_init(nn.Conv2d(4, 16, kernel_size=8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(16, 32, kernel_size=4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 32, kernel_size=3, stride=1)),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-        
-        # Camadas fully connected para mu e logvar
-        self.encoder_fc_mu = layer_init(nn.Linear(32 * 7 * 7, latent_dim))
-        self.encoder_fc_logvar = layer_init(nn.Linear(32 * 7 * 7, latent_dim))
-
-    def forward(self, x):
-        x = self.encoder_cnn(x)
-        mu = self.encoder_fc_mu(x)
-        logvar = self.encoder_fc_logvar(x)
-        return mu, logvar
-
-class Decoder(nn.Module):
-    def __init__(self, latent_dim=32):
-        super(Decoder, self).__init__()
-
-        # Camada fully connected
-        self.decoder_fc = layer_init(nn.Linear(latent_dim, 32 * 7 * 7))
-        
-        # Camadas deconvolucionais (transpostas)
-        self.decoder_deconv = nn.Sequential(
-            nn.ReLU(),
-            nn.Unflatten(1, (32, 7, 7)),
-            nn.ConvTranspose2d(32, 32, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.ConvTranspose2d(16, 4, kernel_size=8, stride=4),
-            nn.Sigmoid()
-        )
-
-    def forward(self, z):
-        x = self.decoder_fc(z)
-        return self.decoder_deconv(x)
-
-# Função de perda VAE
-def vae_loss(recon_x, x, mu, logvar):
-    recon_loss = nn.functional.binary_cross_entropy(recon_x, x, reduction='mean')
-    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return recon_loss + kl
-
-class Agent(nn.Module):
-    def __init__(self, latent_dim, envs):
-        super().__init__()
-        self.actor = layer_init(nn.Linear(latent_dim, envs.single_action_space.n), std=0.01)
-        self.critic = layer_init(nn.Linear(latent_dim, 1), std=1)
-
-    def get_value(self, x):
-        return self.critic(x)
-
-    def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-
-
-def reparameterize(mu, logvar):
-    std = torch.exp(0.5 * logvar)
-    eps = torch.randn_like(std)
-    return mu + eps * std
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
@@ -338,30 +253,10 @@ if __name__ == "__main__":
                         episodic_return = info["episode"]["r"]
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
-        # bootstrap value if not done
-        with torch.no_grad():
-            mu, logvar = encoder.forward(next_obs/255.0)
-            next_obs_latent = reparameterize(mu, logvar)
-            next_value = agent.get_value(next_obs_latent).reshape(1, -1)
-            advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
-                else:
-                    nextnonterminal = 1.0 - dones[t + 1]
-                    nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            returns = advantages + values
-
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape) #(num_envs* num_steps, channels, altura, largura)
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)  #(num_envs* num_steps)
-        b_advantages = advantages.reshape(-1)
-        b_returns = returns.reshape(-1)
+        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)  
         b_values = values.reshape(-1) 
         print(obs.shape, b_obs.shape, b_actions.shape)
 
@@ -372,77 +267,57 @@ if __name__ == "__main__":
         dones_seq = dones.clone() #(steps, num_envs)
 
         #DYNAMICS LEARNING
-        total_loss, kl_loss, reward_loss, recon_loss, obs_latents_wm_tomodel = dynamics_learning(
+        encoder, decoder, transition_model, reward_model, total_wm_loss, kl_loss_wm, reward_loss, recon_loss, obs_latents_wm_tomodel = dynamics_learning(
             args, transition_model, reward_model, encoder, decoder, 
             transition_optimizer, reward_optimizer, encoder_optimizer, 
             decoder_optimizer, obs_seq, actions_seq, rewards_seq, device, vae_loss
         )
 
         # --- BEHAVIOR LEARNING: Otimização do Ator (Política) e Crítico (Valor) ---
+        agent, actor_losses_list, critic_losses_list, total_behavior_losses_list, \
+entropies_list, clipfracs_list, approx_kls_list  = behavior_learning(args, obs_latents_wm_tomodel, agent,
+                                                                     optimizer, imagine_trajectories, device, transition_model, reward_model)
         
-        actor_losses, critic_losses, total_behavior_losses, entropies, clipfracs, approx_kls = behavior_learning(
-            args, 
-            obs_latents_wm_tomodel, 
-            actions_seq,
-            encoder, 
-            transition_model, 
-            reward_model, 
-            agent, 
-            optimizer, 
-            imagine_trajectories, 
-            device
-        )
-        break
-
-        # --- Métricas para logging do Behavior Learning ---
-        writer.add_scalar("losses/behavior_learning/actor_loss", actor_loss.item(), global_step)
-        writer.add_scalar("losses/behavior_learning/critic_loss", v_loss.item(), global_step)
-        writer.add_scalar("losses/behavior_learning/entropy_loss", entropy.item(), global_step)
-        # Se você mantiver as métricas PPO-like
-        writer.add_scalar("losses/behavior_learning/approx_kl", approx_kl.item(), global_step)
-        writer.add_scalar("losses/behavior_learning/clipfrac", np.mean(clipfracs), global_step)
-
-        # Calcula explained_variance para o Behavior Learning
-        with torch.no_grad():
-            # Use todos os estados imaginados (imagined_states) para obter a previsão final do crítico
-            final_critic_predictions = agent.critic(imagined_states).view(-1).cpu().numpy()
-            # Use os lambda_returns calculados
-            true_lambda_returns_np = lambda_returns_flat.cpu().numpy()
-            
-            var_y_behavior = np.var(true_lambda_returns_np)
-            explained_var_behavior = np.nan if var_y_behavior == 0 else 1 - np.var(true_lambda_returns_np - final_critic_predictions) / var_y_behavior
-            writer.add_scalar("losses/behavior_learning/explained_variance", explained_var_behavior, global_step)
-
-
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
         
+        writer.add_scalar("losses/behavior_learning/actor_loss", np.mean(actor_losses_list), global_step)
+        writer.add_scalar("losses/behavior_learning/critic_loss", np.mean(critic_losses_list), global_step)
+        writer.add_scalar("losses/behavior_learning/entropy", np.mean(entropies_list), global_step) 
+        writer.add_scalar("losses/behavior_learning/approx_kl", np.mean(approx_kls_list), global_step)
+        writer.add_scalar("losses/behavior_learning/clipfrac", np.mean(clipfracs_list), global_step)
 
-        # --- Métricas do World Model ---
         writer.add_scalar("losses/world_model/kl_loss", kl_loss_wm.item(), global_step)
-        writer.add_scalar("losses/world_model/reward_loss", loss_reward_wm.item(), global_step)
-        writer.add_scalar("losses/world_model/total_loss", total_world_model_loss.item(), global_step)
-        
-        # Opcional: Aprender a taxa de aprendizado dos otimizadores do World Model
+        writer.add_scalar("losses/world_model/reconstruction_loss", recon_loss.item(), global_step) 
+        writer.add_scalar("losses/world_model/reward_loss", reward_loss.item(), global_step)
+        writer.add_scalar("losses/world_model/total_loss", total_wm_loss.item(), global_step)
+
         writer.add_scalar("charts/learning_rate_wm_transition", transition_optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("charts/learning_rate_wm_reward", reward_optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("charts/learning_rate_wm_encoder", encoder_optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("charts/learning_rate_wm_decoder", decoder_optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("charts/learning_rate_agent", optimizer.param_groups[0]["lr"], global_step)
+    
 
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
 
         with torch.no_grad():
-            sample_obs = b_obs[:10].to(device) / 255.0 
+            sample_obs = b_obs[:10].to(device) / 255.0
             mu, logvar = encoder(sample_obs)
             z = reparameterize(mu, logvar)
             recon = decoder(z)
 
-            # Pegando só o último canal e repetindo para RGB
-            sample_obs_last = sample_obs[:, -1].unsqueeze(1)       
-            recon_last = recon[:, -1].unsqueeze(1)                 
-
-            sample_obs_rgb = sample_obs_last.repeat(1, 3, 1, 1)    
-            recon_rgb = recon_last.repeat(1, 3, 1, 1)             
-
+            if sample_obs.shape[1] == 1:
+                sample_obs_rgb = sample_obs.repeat(1, 3, 1, 1)
+                recon_rgb = recon.repeat(1, 3, 1, 1)
+            elif sample_obs.shape[1] == 3:
+                sample_obs_rgb = sample_obs
+                recon_rgb = recon
+            else:
+                # Fallback para outros números de canais, pegando os 3 primeiros ou avisando
+                print(f"Atenção: Número de canais de observação ({sample_obs.shape[1]}) não é 1 nem 3. Ajuste a visualização.")
+                sample_obs_rgb = sample_obs[:, :3, :, :] if sample_obs.shape[1] >= 3 else sample_obs
+                recon_rgb = recon[:, :3, :, :] if recon.shape[1] >= 3 else recon
 
             writer.add_images("reconstructions/original", sample_obs_rgb, global_step)
             writer.add_images("reconstructions/reconstructed", recon_rgb, global_step)
